@@ -63,6 +63,48 @@ app.post('/api/apprenants', async (req, res) => {
     }
 });
 
+// 👉 Route pour connecter un apprenant (POST) - AJOUTÉE ICI
+app.post('/api/connexion', async (req, res) => {
+    const { identifiant, password } = req.body;
+
+    try {
+        // Recherche par email
+        let query = 'SELECT * FROM apprenants WHERE email = $1';
+        let values = [identifiant];
+
+        let utilisateur = await pool.query(query, values);
+
+        // Si non trouvé par email, on essaie par l'ID numérique si l'identifiant est un nombre
+        if (utilisateur.rows.length === 0 && !isNaN(identifiant)) {
+            query = 'SELECT * FROM apprenants WHERE id = $1';
+            values = [parseInt(identifiant)];
+            utilisateur = await pool.query(query, values);
+        }
+
+        if (utilisateur.rows.length === 0) {
+            return res.status(400).json({ success: false, error: "Compte introuvable." });
+        }
+
+        const apprenant = utilisateur.rows[0];
+
+        // Vérification du mot de passe
+        if (apprenant.password !== password) {
+            return res.status(400).json({ success: false, error: "Mot de passe incorrect." });
+        }
+
+        // Connexion réussie
+        res.json({ 
+            success: true, 
+            message: "Connexion réussie !", 
+            data: apprenant 
+        });
+
+    } catch (err) {
+        console.error("Erreur lors de la connexion :", err.message);
+        res.status(500).json({ success: false, error: "Erreur serveur lors de la connexion." });
+    }
+});
+
 // Route pour lister tous les apprenants (GET)
 app.get('/api/apprenants', async (req, res) => {
     try {
