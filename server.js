@@ -50,11 +50,16 @@ app.post('/api/apprenants', async (req, res) => {
         res.status(201).json({ success: true, data: newApprenant.rows[0] });
     } catch (err) {
         console.error("Erreur insertion :", err.message);
+        
+        // Capture l'erreur d'unicité PostgreSQL (Code 23505 : violation de contrainte unique sur l'email)
         if (err.code === '23505') {
-            res.status(400).json({ success: false, error: "Cet email est déjà utilisé." });
-        } else {
-            res.status(500).json({ success: false, error: "Erreur lors de l'enregistrement sur le serveur." });
+            return res.status(400).json({ 
+                success: false, 
+                error: "Cet e-mail est déjà utilisé par un autre compte !" 
+            });
         }
+        
+        res.status(500).json({ success: false, error: "Erreur lors de l'enregistrement sur le serveur." });
     }
 });
 
