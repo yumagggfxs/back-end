@@ -12,9 +12,10 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// Identifiants Airtel Money (Définis via les variables d'environnement sur Render)
+// Identifiants Airtel Money (Intégrés directement + secours par variables)
 const AIRTEL_CLIENT_ID = process.env.AIRTEL_CLIENT_ID || "VOTRE_CLIENT_ID";
 const AIRTEL_CLIENT_SECRET = process.env.AIRTEL_CLIENT_SECRET || "VOTRE_CLIENT_SECRET";
+const AIRTEL_WEBHOOK_SECRET = process.env.AIRTEL_WEBHOOK_SECRET || "4a6b14aa75414105a9f8dd93d6ff3176";
 const AIRTEL_ENV_URL = process.env.AIRTEL_ENV_URL || "https://openapiuat.airtel.africa"; // URL de Sandbox (Test)
 
 // 👉 INITIALISATION DES TABLES POSTGRESQL
@@ -160,7 +161,7 @@ app.post('/api/payer-cours', async (req, res) => {
 
     try {
         const reference = `REF-${Date.now()}`;
-        // Nettoyage du numéro de téléphone (enleve le symbole + et les espaces)
+        // Nettoyage du numéro de téléphone (enlève le symbole + et les espaces)
         const telephonePropre = telephone.replace('+', '').replace(/\s+/g, '').trim();
 
         // 1. Enregistrer la transaction en attente dans la table "paiements"
@@ -228,27 +229,42 @@ app.post('/api/payer-cours', async (req, res) => {
     }
 });
 
-// 🔔 ROUTE : Webhook Airtel (Notification automatique de confirmation du paiement)
-app.post('/api/airtel-webhook', async (req, res) => {
-    const { transaction } = req.body;
-    
-    if (transaction) {
-        const reference = transaction.id;
-        const status = transaction.status; // 'SUCCESS' ou 'FAILED'
+// 🔔 ROUTE : Webhook Airtel (Compatible GET/POST)
+app.all('/api/airtel-webhook', async (req, res) => {
+    // Si Airtel teste l'URL via une requête GET (ping)
+    if (req.method === 'GET') {
+        return res.status(200).send("OK");
+    }
 
-        if (status === 'SUCCESS') {
-            await pool.query(
-                `UPDATE paiements SET statut = 'SUCCESS' WHERE reference_transaction = $1`,
-                [reference]
-            );
-            console.log(`✅ Paiement validé avec succès pour la référence : ${reference}`);
+    // Si Airtel envoie la notification de paiement via POST
+    if (req.method === 'POST') {
+        try {
+            const { transaction } = req.body || {};
+            
+            if (transaction) {
+                const reference = transaction.id;
+                const status = transaction.status; // 'SUCCESS' ou 'FAILED'
+
+                if (status === 'SUCCESS') {
+                    await pool.query(
+                        `UPDATE paiements SET statut = 'SUCCESS' WHERE reference_transaction = $1`,
+                        [reference]
+                    );
+                    console.log(`✅ Paiement validé avec succès pour la référence : ${reference}`);
+                }
+            }
+            return res.status(200).json({ status: "SUCCESS", message: "Webhook reçu avec succès" });
+        } catch (err) {
+            console.error("Erreur lors du traitement du webhook :", err.message);
+            return res.status(200).json({ status: "ERROR", message: "Erreur traitée" });
         }
     }
+
     res.status(200).send("OK");
 });
 
 // Lancement du serveur Express
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Serveur BMJ dÉmarrÉ sur le port ${PORT}`);
+    console.log(`🚀 Serveur BMJ démarré sur le port ${PORT}`);
 });
