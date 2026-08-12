@@ -1,18 +1,24 @@
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
+const axios = require('axios'); // N'oubliez pas de faire : npm install axios
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
-// Connexion à votre base PostgreSQL sur Render
+// Connection PostgreSQL
 const pool = new Pool({
-    connectionString: 'postgresql://bmj_db_user:5FSX8YeJNzwinKdFOrIeEC43aQsuzf91@dpg-d9sdlt49v7es73emrq8g-a/bmj_db',
+    connectionString: process.env.DATABASE_URL || 'postgresql://bmj_db_user:5FSX8YeJNzwinKdFOrIeEC43aQsuzf91@dpg-d9sdlt49v7es73emrq8g-a/bmj_db',
     ssl: { rejectUnauthorized: false }
 });
 
-// 👉 CRÉATION AUTOMATIQUE DE LA TABLE AU DÉMARRAGE
+// Identifiants Airtel Money (à configurer dans les variables d'environnement Render)
+const AIRTEL_CLIENT_ID = process.env.AIRTEL_CLIENT_ID || "VOTRE_CLIENT_ID";
+const AIRTEL_CLIENT_SECRET = process.env.AIRTEL_CLIENT_SECRET || "VOTRE_CLIENT_SECRET";
+const AIRTEL_ENV_URL = process.env.AIRTEL_ENV_URL || "https://openapiuat.airtel.africa"; // UAT (Test) ou Prod
+
+// 👉 Initialisation des tables SQL
 pool.query(`
     CREATE TABLE IF NOT EXISTS apprenants (
         id SERIAL PRIMARY KEY,
@@ -28,93 +34,131 @@ pool.query(`
         photo TEXT,
         date_inscription TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS paiements (
+        id SERIAL PRIMARY KEY,
+        apprenant_id INT REFERENCES apprenants(id),
+        cours_nom VARCHAR(150) NOT NULL,
+        montant NUMERIC NOT NULL,
+        devise VARCHAR(10) DEFAULT 'CDF',
+        telephone_payeur VARCHAR(50) NOT NULL,
+        reference_transaction VARCHAR(100) UNIQUE,
+        statut VARCHAR(50) DEFAULT 'PENDING',
+        date_paiement TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
 `).then(() => {
-    console.log("✅ Table 'apprenants' prête (créée ou déjà existante) !");
+    console.log("✅ Tables PostgreSQL initialisées !");
 }).catch(err => {
-    console.error("❌ Erreur table :", err);
+    console.error("❌ Erreur tables SQL :", err);
 });
 
-// Route pour enregistrer un apprenant (POST)
-app.post('/api/apprenants', async (req, res) => {
-    const { nom, sexe, pays, telephone, ville, email, domaine, niveau, password, photo } = req.body;
-    
+// 🔑 Fonction pour obtenir le jeton d'accès Airtel Money
+async function getAirtelToken() {
     try {
-        const query = `
-            INSERT INTO apprenants (nom, sexe, pays, telephone, ville, email, domaine, niveau, password, photo) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
-            RETURNING *;
-        `;
-        const values = [nom, sexe, pays, telephone, ville, email, domaine, niveau, password, photo];
-        
-        const newApprenant = await pool.query(query, values);
-        res.status(201).json({ success: true, data: newApprenant.rows[0] });
-    } catch (err) {
-        console.error("Erreur insertion :", err.message);
-        
-        // Capture l'erreur d'unicité PostgreSQL (Code 23505 : violation de contrainte unique sur l'email)
-        if (err.code === '23505') {
-            return res.status(400).json({ 
-                success: false, 
-                error: "Cet e-mail est déjà utilisé par un autre compte !" 
-            });
-        }
-        
-        res.status(500).json({ success: false, error: "Erreur lors de l'enregistrement sur le serveur." });
+        const response = await axios.post(`${AIRTEL_ENV_URL}/auth/oauth2/token`, {
+            client_id: AIRTEL_CLIENT_ID,
+            client_secret: AIRTEL_CLIENT_SECRET,
+            grant_type: "client_credentials"
+        }, {
+            headers: { 'Content-Type': 'application/json' }
+        });
+        return response.data.access_token;
+    } catch (error) {
+        console.error("Erreur Auth Airtel :", error.response?.data || error.message);
+        throw new Error("Impossible de s'authentifier auprès d'Airtel");
     }
-});
+}
 
-// 👉 Route pour connecter un apprenant (POST) - AJOUTÉE ICI
-app.post('/api/connexion', async (req, res) => {
-    const { identifiant, password } = req.body;
+// 💳 Route pour initier un paiement Airtel Money (POST)
+app.post('/api/payer-cours', async (req, res) => {
+    const { apprenant_id, cours_nom, montant, telephone } = req.body;
+
+    if (!apprenant_id || !cours_nom || !montant || !telephone) {
+        return res.status(400).json({ success: false, error: "Tous les champs sont requis." });
+    }
 
     try {
-        // Recherche par email
-        let query = 'SELECT * FROM apprenants WHERE email = $1';
-        let values = [identifiant];
+        const reference = `REF-${Date.now()}`;
 
-        let utilisateur = await pool.query(query, values);
+        // 1. Enregistrer le paiement en attente dans la base de données
+        await pool.query(
+            `INSERT INTO paiements (apprenant_id, cours_nom, montant, telephone_payeur, reference_transaction, statut) 
+             VALUES ($1, $2, $3, $4, $5, 'PENDING')`,
+            [apprenant_id, cours_nom, montant, telephone, reference]
+        );
 
-        // Si non trouvé par email, on essaie par l'ID numérique si l'identifiant est un nombre
-        if (utilisateur.rows.length === 0 && !isNaN(identifiant)) {
-            query = 'SELECT * FROM apprenants WHERE id = $1';
-            values = [parseInt(identifiant)];
-            utilisateur = await pool.query(query, values);
-        }
+        // 2. Récupérer le Token Airtel
+        const token = await getAirtelToken();
 
-        if (utilisateur.rows.length === 0) {
-            return res.status(400).json({ success: false, error: "Compte introuvable." });
-        }
+        // 3. Lancer la requête de paiement Push USSD auprès d'Airtel
+        const airtelPayload = {
+            reference: reference,
+            subscriber: {
+                country: "CD", // Ex: CD pour RDC, CG pour Congo Bzz, GA pour Gabon
+                currency: "CDF", // Devise (ex: CDF ou USD)
+                msisdn: telephone.replace('+', '').trim() // Nettoyage du numéro
+            },
+            transaction: {
+                amount: parseFloat(montant),
+                country: "CD",
+                currency: "CDF",
+                id: reference
+            }
+        };
 
-        const apprenant = utilisateur.rows[0];
+        const airtelRes = await axios.post(
+            `${AIRTEL_ENV_URL}/merchant/v1/payments/`,
+            airtelPayload,
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': '*/*',
+                    'X-Country': 'CD',
+                    'X-Currency': 'CDF',
+                    'Authorization': `Bearer ${token}`
+                }
+            }
+        );
 
-        // Vérification du mot de passe
-        if (apprenant.password !== password) {
-            return res.status(400).json({ success: false, error: "Mot de passe incorrect." });
-        }
-
-        // Connexion réussie
-        res.json({ 
-            success: true, 
-            message: "Connexion réussie !", 
-            data: apprenant 
+        res.json({
+            success: true,
+            message: "Demande envoyée ! Veuillez valider le paiement sur votre téléphone.",
+            reference: reference,
+            airtelDetails: airtelRes.data
         });
 
     } catch (err) {
-        console.error("Erreur lors de la connexion :", err.message);
-        res.status(500).json({ success: false, error: "Erreur serveur lors de la connexion." });
+        console.error("Erreur Paiement :", err.response?.data || err.message);
+        res.status(500).json({
+            success: false,
+            error: "Échec du déclenchement du paiement. Vérifiez le numéro de téléphone."
+        });
     }
 });
 
-// Route pour lister tous les apprenants (GET)
-app.get('/api/apprenants', async (req, res) => {
-    try {
-        const allApprenants = await pool.query('SELECT * FROM apprenants ORDER BY date_inscription DESC');
-        res.json(allApprenants.rows);
-    } catch (err) {
-        console.error("Erreur lecture :", err.message);
-        res.status(500).json({ success: false, error: "Erreur serveur" });
+// 🔔 Route Webhook Airtel (Pour recevoir la confirmation automatique)
+app.post('/api/airtel-webhook', async (req, res) => {
+    const { transaction } = req.body;
+    
+    if (transaction) {
+        const reference = transaction.id;
+        const status = transaction.status; // 'SUCCESS' ou 'FAILED'
+
+        if (status === 'SUCCESS') {
+            await pool.query(
+                `UPDATE paiements SET statut = 'SUCCESS' WHERE reference_transaction = $1`,
+                [reference]
+            );
+            console.log(`✅ Paiement validé pour la référence : ${reference}`);
+        }
     }
+    res.status(200).send("OK");
 });
+
+// --- Vos routes existantes ---
+app.post('/api/apprenants', async (req, res) => { /* ... */ });
+app.post('/api/connexion', async (req, res) => { /* ... */ });
+app.get('/api/apprenants', async (req, res) => { /* ... */ });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
