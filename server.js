@@ -3,7 +3,24 @@
    BACKEND API
    NODE.JS + EXPRESS + POSTGRESQL
    RENDER
+
+   ROUTES :
+
+   GET  /
+   GET  /api/test-db
+
+   POST /api/inscription
+   POST /api/connexion
+
+   POST /api/admin/connexion
+   GET  /api/admin/verifier
+
+   GET  /api/apprenants
+
+   GET  /api/paiements
+   POST /api/paiements
 ========================================================= */
+
 
 const express = require("express");
 const cors = require("cors");
@@ -15,13 +32,31 @@ const PORT = process.env.PORT || 3000;
 
 
 /* =========================================================
-   CONNEXION POSTGRESQL
-   URL DIRECTEMENT DANS SERVER.JS
+   CONFIGURATION POSTGRESQL
 ========================================================= */
 
+/*
+   IMPORTANT
+
+   Pour l'instant, le serveur utilise DATABASE_URL
+   si elle existe dans Render.
+
+   Sinon, mets ton URL PostgreSQL ici.
+
+   Exemple :
+
+   const DATABASE_URL =
+       "postgresql://USER:PASSWORD@HOST/DATABASE";
+*/
+
 const DATABASE_URL =
+    process.env.DATABASE_URL ||
     "postgresql://bmj_db_user:5FSX8YeJNzwinKdFOrIeEC43aQsuzf91@dpg-d9sdlt49v7es73emrq8g-a/bmj_db";
 
+
+/* =========================================================
+   POOL POSTGRESQL
+========================================================= */
 
 const pool = new Pool({
 
@@ -38,35 +73,46 @@ const pool = new Pool({
    CORS
 ========================================================= */
 
-app.use(cors({
-    origin: "*",
-    methods: [
-        "GET",
-        "POST",
-        "PUT",
-        "DELETE",
-        "PATCH",
-        "OPTIONS"
-    ],
-    allowedHeaders: [
-        "Content-Type",
-        "Authorization"
-    ]
-}));
+app.use(
+    cors({
+
+        origin: "*",
+
+        methods: [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "PATCH",
+            "OPTIONS"
+        ],
+
+        allowedHeaders: [
+            "Content-Type",
+            "Authorization"
+        ]
+
+    })
+);
 
 
 /* =========================================================
    JSON
 ========================================================= */
 
-app.use(express.json({
-    limit: "15mb"
-}));
+app.use(
+    express.json({
+        limit: "15mb"
+    })
+);
 
-app.use(express.urlencoded({
-    extended: true,
-    limit: "15mb"
-}));
+
+app.use(
+    express.urlencoded({
+        extended: true,
+        limit: "15mb"
+    })
+);
 
 
 /* =========================================================
@@ -81,19 +127,42 @@ async function testerDatabase() {
             "SELECT NOW() AS heure"
         );
 
-        console.log("=================================");
-        console.log("✅ POSTGRESQL CONNECTÉ");
-        console.log("🕐 Heure :", result.rows[0].heure);
-        console.log("=================================");
+        console.log(
+            "================================="
+        );
+
+        console.log(
+            "✅ POSTGRESQL CONNECTÉ"
+        );
+
+        console.log(
+            "🕐 Heure :",
+            result.rows[0].heure
+        );
+
+        console.log(
+            "================================="
+        );
 
         return true;
 
     } catch (error) {
 
-        console.error("=================================");
-        console.error("❌ ERREUR POSTGRESQL");
-        console.error(error.message);
-        console.error("=================================");
+        console.error(
+            "================================="
+        );
+
+        console.error(
+            "❌ ERREUR POSTGRESQL"
+        );
+
+        console.error(
+            error.message
+        );
+
+        console.error(
+            "================================="
+        );
 
         return false;
     }
@@ -101,12 +170,13 @@ async function testerDatabase() {
 
 
 /* =========================================================
-   CREATION DES TABLES
+   CRÉATION DES TABLES
 ========================================================= */
 
 async function creerTables() {
 
     try {
+
 
         /* =====================================================
            TABLE USERS
@@ -133,6 +203,33 @@ async function creerTables() {
                 is_premium BOOLEAN DEFAULT FALSE,
 
                 photo TEXT,
+
+                date_creation
+                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+            );
+
+        `);
+
+
+        /* =====================================================
+           TABLE ADMINS
+        ===================================================== */
+
+        await pool.query(`
+
+            CREATE TABLE IF NOT EXISTS admins (
+
+                id SERIAL PRIMARY KEY,
+
+                nom VARCHAR(150) NOT NULL,
+
+                email VARCHAR(255) UNIQUE NOT NULL,
+
+                secret_key TEXT NOT NULL,
+
+                role VARCHAR(50)
+                    DEFAULT 'admin',
 
                 date_creation
                     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -191,7 +288,91 @@ async function creerTables() {
         `);
 
 
-        console.log("✅ TABLES VÉRIFIÉES");
+        /* =====================================================
+           CRÉER LE COMPTE ADMIN PAR DÉFAUT
+        ===================================================== */
+
+        const adminEmail =
+            "admin@bmjservice.com";
+
+        const adminSecret =
+            "BMJ-ADMIN-2026";
+
+
+        const adminExiste =
+            await pool.query(
+
+                `
+
+                SELECT id
+
+                FROM admins
+
+                WHERE email = $1
+
+                LIMIT 1
+
+                `,
+
+                [
+                    adminEmail
+                ]
+
+            );
+
+
+        if (
+            adminExiste.rows.length === 0
+        ) {
+
+            await pool.query(
+
+                `
+
+                INSERT INTO admins
+                (
+                    nom,
+                    email,
+                    secret_key,
+                    role
+                )
+
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4
+                )
+
+                `,
+
+                [
+                    "Administrateur BMJ SERVICE",
+                    adminEmail,
+                    adminSecret,
+                    "admin"
+                ]
+
+            );
+
+            console.log(
+                "✅ COMPTE ADMIN CRÉÉ"
+            );
+
+        } else {
+
+            console.log(
+                "ℹ️ COMPTE ADMIN DÉJÀ EXISTANT"
+            );
+
+        }
+
+
+        console.log(
+            "✅ TABLES VÉRIFIÉES"
+        );
+
 
     } catch (error) {
 
@@ -201,6 +382,7 @@ async function creerTables() {
         );
 
     }
+
 }
 
 
@@ -208,597 +390,958 @@ async function creerTables() {
    PAGE PRINCIPALE
 ========================================================= */
 
-app.get("/", (req, res) => {
+app.get(
+    "/",
+    (req, res) => {
 
-    res.json({
+        res.json({
 
-        success: true,
+            success: true,
 
-        message:
-            "BMJ SERVICE API fonctionne.",
+            message:
+                "BMJ SERVICE API fonctionne.",
 
-        api: {
-            testDB: "/api/test-db",
-            inscription: "/api/inscription",
-            connexion: "/api/connexion",
-            apprenants: "/api/apprenants",
-            paiements: "/api/paiements"
-        }
+            api: {
 
-    });
+                testDB:
+                    "/api/test-db",
 
-});
+                inscription:
+                    "/api/inscription",
+
+                connexion:
+                    "/api/connexion",
+
+                adminConnexion:
+                    "/api/admin/connexion",
+
+                adminVerification:
+                    "/api/admin/verifier",
+
+                apprenants:
+                    "/api/apprenants",
+
+                paiements:
+                    "/api/paiements"
+
+            }
+
+        });
+
+    }
+);
 
 
 /* =========================================================
    TEST DATABASE
 ========================================================= */
 
-app.get("/api/test-db", async (req, res) => {
+app.get(
+    "/api/test-db",
+    async (req, res) => {
 
-    try {
+        try {
 
-        const result = await pool.query(
-            "SELECT NOW() AS heure"
-        );
+            const result =
+                await pool.query(
+                    "SELECT NOW() AS heure"
+                );
 
-        res.json({
 
-            success: true,
+            res.json({
 
-            message:
-                "PostgreSQL fonctionne.",
+                success: true,
 
-            database:
-                result.rows[0].heure
+                message:
+                    "PostgreSQL fonctionne.",
 
-        });
+                database:
+                    result.rows[0].heure
 
-    } catch (error) {
+            });
 
-        console.error(
-            "❌ TEST DB :",
-            error.message
-        );
 
-        res.status(500).json({
+        } catch (error) {
 
-            success: false,
-
-            message:
-                "Erreur connexion PostgreSQL.",
-
-            error:
+            console.error(
+                "❌ TEST DB :",
                 error.message
+            );
 
-        });
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur connexion PostgreSQL.",
+
+                error:
+                    error.message
+
+            });
+
+        }
 
     }
-
-});
+);
 
 
 /* =========================================================
-   INSCRIPTION
+   INSCRIPTION UTILISATEUR
 ========================================================= */
 
-app.post("/api/inscription", async (req, res) => {
+app.post(
+    "/api/inscription",
+    async (req, res) => {
 
-    try {
+        try {
 
-        const {
-            nom,
-            email,
-            telephone,
-            password,
-            domaine,
-            photo
-        } = req.body;
+            const {
 
-
-        /* -----------------------------------------------------
-           VERIFICATION
-        ----------------------------------------------------- */
-
-        if (!nom || !email || !password) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "Nom, email et mot de passe obligatoires."
-
-            });
-
-        }
-
-
-        const emailNormalise =
-            String(email)
-                .trim()
-                .toLowerCase();
-
-
-        /* -----------------------------------------------------
-           VERIFIER SI L'EMAIL EXISTE
-        ----------------------------------------------------- */
-
-        const existe = await pool.query(`
-
-            SELECT id
-
-            FROM users
-
-            WHERE email = $1
-
-            LIMIT 1
-
-        `, [
-            emailNormalise
-        ]);
-
-
-        if (existe.rows.length > 0) {
-
-            return res.status(409).json({
-
-                success: false,
-
-                message:
-                    "Cette adresse email est déjà utilisée."
-
-            });
-
-        }
-
-
-        /* -----------------------------------------------------
-           CREER UTILISATEUR
-        ----------------------------------------------------- */
-
-        const result = await pool.query(`
-
-            INSERT INTO users
-            (
                 nom,
                 email,
                 telephone,
                 password,
                 domaine,
-                premium,
-                is_premium,
                 photo
-            )
 
-            VALUES
-            (
-                $1,
-                $2,
-                $3,
-                $4,
-                $5,
-                FALSE,
-                FALSE,
-                $6
-            )
-
-            RETURNING
-                id,
-                nom,
-                email,
-                telephone,
-                domaine,
-                premium,
-                is_premium,
-                photo,
-                date_creation
-
-        `, [
-
-            nom.trim(),
-
-            emailNormalise,
-
-            telephone || null,
-
-            password,
-
-            domaine || null,
-
-            photo || null
-
-        ]);
+            } = req.body;
 
 
-        res.status(201).json({
+            /* ----------------------------------------------
+               VALIDATION
+            ---------------------------------------------- */
 
-            success: true,
+            if (
+                !nom ||
+                !email ||
+                !password
+            ) {
 
-            message:
-                "Inscription réussie.",
+                return res.status(400).json({
 
-            user:
-                result.rows[0],
+                    success: false,
 
-            utilisateur:
-                result.rows[0]
+                    message:
+                        "Nom, email et mot de passe obligatoires."
 
-        });
+                });
+
+            }
 
 
-    } catch (error) {
+            const emailNormalise =
+                String(email)
+                    .trim()
+                    .toLowerCase();
 
-        console.error(
-            "❌ ERREUR INSCRIPTION :",
-            error.message
-        );
 
-        res.status(500).json({
+            /* ----------------------------------------------
+               VÉRIFIER EMAIL
+            ---------------------------------------------- */
 
-            success: false,
+            const existe =
+                await pool.query(
 
-            message:
-                "Erreur serveur lors de l'inscription.",
+                    `
 
-            error:
+                    SELECT id
+
+                    FROM users
+
+                    WHERE email = $1
+
+                    LIMIT 1
+
+                    `,
+
+                    [
+                        emailNormalise
+                    ]
+
+                );
+
+
+            if (
+                existe.rows.length > 0
+            ) {
+
+                return res.status(409).json({
+
+                    success: false,
+
+                    message:
+                        "Cette adresse email est déjà utilisée."
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------
+               CRÉER UTILISATEUR
+            ---------------------------------------------- */
+
+            const result =
+                await pool.query(
+
+                    `
+
+                    INSERT INTO users
+                    (
+                        nom,
+                        email,
+                        telephone,
+                        password,
+                        domaine,
+                        premium,
+                        is_premium,
+                        photo
+                    )
+
+                    VALUES
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5,
+                        FALSE,
+                        FALSE,
+                        $6
+                    )
+
+                    RETURNING
+                        id,
+                        nom,
+                        email,
+                        telephone,
+                        domaine,
+                        premium,
+                        is_premium,
+                        photo,
+                        date_creation
+
+                    `,
+
+                    [
+
+                        nom.trim(),
+
+                        emailNormalise,
+
+                        telephone || null,
+
+                        password,
+
+                        domaine || null,
+
+                        photo || null
+
+                    ]
+
+                );
+
+
+            res.status(201).json({
+
+                success: true,
+
+                message:
+                    "Inscription réussie.",
+
+                data:
+                    result.rows[0],
+
+                user:
+                    result.rows[0],
+
+                utilisateur:
+                    result.rows[0]
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "❌ ERREUR INSCRIPTION :",
                 error.message
-
-        });
-
-    }
-
-});
+            );
 
 
-/* =========================================================
-   CONNEXION
-========================================================= */
-
-app.post("/api/connexion", async (req, res) => {
-
-    try {
-
-        const {
-            email,
-            password
-        } = req.body;
-
-
-        if (!email || !password) {
-
-            return res.status(400).json({
+            res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Email et mot de passe obligatoires."
+                    "Erreur serveur lors de l'inscription.",
+
+                error:
+                    error.message
 
             });
 
         }
 
-
-        const emailNormalise =
-            String(email)
-                .trim()
-                .toLowerCase();
+    }
+);
 
 
-        /* -----------------------------------------------------
-           RECHERCHE UTILISATEUR
-        ----------------------------------------------------- */
+/* =========================================================
+   CONNEXION UTILISATEUR
+========================================================= */
 
-        const result = await pool.query(`
+app.post(
+    "/api/connexion",
+    async (req, res) => {
 
-            SELECT
-                id,
-                nom,
+        try {
+
+            const {
+
+                identifiant,
                 email,
-                telephone,
-                password,
-                domaine,
-                premium,
-                is_premium,
-                photo,
-                date_creation
+                password
 
-            FROM users
-
-            WHERE email = $1
-
-            LIMIT 1
-
-        `, [
-            emailNormalise
-        ]);
+            } = req.body;
 
 
-        if (result.rows.length === 0) {
+            /*
+               Ton ancien frontend utilise :
 
-            return res.status(401).json({
+               identifiant
+
+               On accepte également :
+
+               email
+            */
+
+            const login =
+                identifiant ||
+                email;
+
+
+            if (
+                !login ||
+                !password
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Email et mot de passe obligatoires."
+
+                });
+
+            }
+
+
+            const loginNormalise =
+                String(login)
+                    .trim()
+                    .toLowerCase();
+
+
+            /* ----------------------------------------------
+               RECHERCHE
+            ---------------------------------------------- */
+
+            const result =
+                await pool.query(
+
+                    `
+
+                    SELECT
+
+                        id,
+                        nom,
+                        email,
+                        telephone,
+                        password,
+                        domaine,
+                        premium,
+                        is_premium,
+                        photo,
+                        date_creation
+
+                    FROM users
+
+                    WHERE email = $1
+
+                    LIMIT 1
+
+                    `,
+
+                    [
+                        loginNormalise
+                    ]
+
+                );
+
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    message:
+                        "Email ou mot de passe incorrect.",
+
+                    error:
+                        "Email ou mot de passe incorrect."
+
+                });
+
+            }
+
+
+            const utilisateur =
+                result.rows[0];
+
+
+            /* ----------------------------------------------
+               MOT DE PASSE
+            ---------------------------------------------- */
+
+            if (
+                utilisateur.password !==
+                password
+            ) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    message:
+                        "Email ou mot de passe incorrect.",
+
+                    error:
+                        "Email ou mot de passe incorrect."
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------
+               NE PAS ENVOYER PASSWORD
+            ---------------------------------------------- */
+
+            delete utilisateur.password;
+
+
+            res.json({
+
+                success: true,
+
+                message:
+                    "Connexion réussie.",
+
+                data:
+                    utilisateur,
+
+                user:
+                    utilisateur,
+
+                utilisateur:
+                    utilisateur
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "❌ ERREUR CONNEXION :",
+                error.message
+            );
+
+
+            res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Email ou mot de passe incorrect."
+                    "Erreur serveur lors de la connexion.",
+
+                error:
+                    error.message
 
             });
 
         }
 
+    }
+);
 
-        const utilisateur =
-            result.rows[0];
+
+/* =========================================================
+   CONNEXION ADMIN
+========================================================= */
+
+app.post(
+    "/api/admin/connexion",
+    async (req, res) => {
+
+        try {
+
+            const {
+
+                email,
+                secretKey
+
+            } = req.body;
 
 
-        /* -----------------------------------------------------
-           VERIFICATION PASSWORD
-        ----------------------------------------------------- */
+            /* ----------------------------------------------
+               VALIDATION
+            ---------------------------------------------- */
 
-        if (
-            utilisateur.password !== password
-        ) {
+            if (
+                !email ||
+                !secretKey
+            ) {
 
-            return res.status(401).json({
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Email et code secret obligatoires.",
+
+                    error:
+                        "Email et code secret obligatoires."
+
+                });
+
+            }
+
+
+            const emailNormalise =
+                String(email)
+                    .trim()
+                    .toLowerCase();
+
+
+            /* ----------------------------------------------
+               RECHERCHE ADMIN
+            ---------------------------------------------- */
+
+            const result =
+                await pool.query(
+
+                    `
+
+                    SELECT
+
+                        id,
+                        nom,
+                        email,
+                        secret_key,
+                        role,
+                        date_creation
+
+                    FROM admins
+
+                    WHERE email = $1
+
+                    LIMIT 1
+
+                    `,
+
+                    [
+                        emailNormalise
+                    ]
+
+                );
+
+
+            /* ----------------------------------------------
+               ADMIN INTROUVABLE
+            ---------------------------------------------- */
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    message:
+                        "Administrateur introuvable.",
+
+                    error:
+                        "Email ou code secret incorrect."
+
+                });
+
+            }
+
+
+            const admin =
+                result.rows[0];
+
+
+            /* ----------------------------------------------
+               VÉRIFICATION CODE SECRET
+            ---------------------------------------------- */
+
+            if (
+                admin.secret_key !==
+                secretKey
+            ) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    message:
+                        "Code secret incorrect.",
+
+                    error:
+                        "Email ou code secret incorrect."
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------
+               NE PAS RETOURNER SECRET
+            ---------------------------------------------- */
+
+            delete admin.secret_key;
+
+
+            /* ----------------------------------------------
+               RETOUR
+            ---------------------------------------------- */
+
+            res.json({
+
+                success: true,
+
+                message:
+                    "Authentification administrateur réussie.",
+
+                data: {
+
+                    ...admin,
+
+                    isAdmin: true,
+
+                    admin: true
+
+                }
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "❌ ERREUR CONNEXION ADMIN :",
+                error.message
+            );
+
+
+            res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Email ou mot de passe incorrect."
+                    "Erreur serveur lors de la connexion administrateur.",
+
+                error:
+                    error.message
 
             });
 
         }
 
-
-        /* -----------------------------------------------------
-           NE PAS RETOURNER LE PASSWORD
-        ----------------------------------------------------- */
-
-        delete utilisateur.password;
-
-
-        res.json({
-
-            success: true,
-
-            message:
-                "Connexion réussie.",
-
-            user:
-                utilisateur,
-
-            utilisateur:
-                utilisateur
-
-        });
-
-
-    } catch (error) {
-
-        console.error(
-            "❌ ERREUR CONNEXION :",
-            error.message
-        );
-
-        res.status(500).json({
-
-            success: false,
-
-            message:
-                "Erreur serveur lors de la connexion.",
-
-            error:
-                error.message
-
-        });
-
     }
-
-});
+);
 
 
 /* =========================================================
-   RECUPERER LES APPRENANTS
+   VÉRIFIER UN ADMIN
 ========================================================= */
 
-app.get("/api/apprenants", async (req, res) => {
+app.get(
+    "/api/admin/verifier",
+    async (req, res) => {
 
-    try {
+        try {
 
-        const result = await pool.query(`
-
-            SELECT
-                id,
-                nom,
-                email,
-                telephone,
-                domaine,
-                premium,
-                is_premium,
-                photo,
-                date_creation
-
-            FROM users
-
-            ORDER BY id DESC
-
-        `);
+            const email =
+                req.query.email;
 
 
-        res.json({
+            if (!email) {
 
-            success: true,
+                return res.status(400).json({
 
-            data:
-                result.rows,
+                    success: false,
 
-            total:
-                result.rows.length
+                    message:
+                        "Email administrateur obligatoire."
 
-        });
+                });
+
+            }
 
 
-    } catch (error) {
+            const emailNormalise =
+                String(email)
+                    .trim()
+                    .toLowerCase();
 
-        console.error(
-            "❌ ERREUR APPRENANTS :",
-            error.message
-        );
 
-        res.status(500).json({
+            const result =
+                await pool.query(
 
-            success: false,
+                    `
 
-            message:
-                "Impossible de récupérer les apprenants.",
+                    SELECT
 
-            error:
+                        id,
+                        nom,
+                        email,
+                        role,
+                        date_creation
+
+                    FROM admins
+
+                    WHERE email = $1
+
+                    LIMIT 1
+
+                    `,
+
+                    [
+                        emailNormalise
+                    ]
+
+                );
+
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.json({
+
+                    success: true,
+
+                    isAdmin: false,
+
+                    data: null
+
+                });
+
+            }
+
+
+            res.json({
+
+                success: true,
+
+                isAdmin: true,
+
+                data:
+                    result.rows[0]
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "❌ ERREUR VÉRIFICATION ADMIN :",
                 error.message
+            );
 
-        });
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de la vérification administrateur.",
+
+                error:
+                    error.message
+
+            });
+
+        }
 
     }
-
-});
+);
 
 
 /* =========================================================
-   RECUPERER LES PAIEMENTS
+   RÉCUPÉRER LES APPRENANTS
 ========================================================= */
 
-app.get("/api/paiements", async (req, res) => {
+app.get(
+    "/api/apprenants",
+    async (req, res) => {
 
-    try {
+        try {
 
-        const result = await pool.query(`
+            const result =
+                await pool.query(
 
-            SELECT *
+                    `
 
-            FROM paiements
+                    SELECT
 
-            ORDER BY id DESC
+                        id,
+                        nom,
+                        email,
+                        telephone,
+                        domaine,
+                        premium,
+                        is_premium,
+                        photo,
+                        date_creation
 
-        `);
+                    FROM users
+
+                    ORDER BY id DESC
+
+                    `
+
+                );
 
 
-        res.json({
+            res.json({
 
-            success: true,
+                success: true,
 
-            data:
-                result.rows,
+                data:
+                    result.rows,
 
-            total:
-                result.rows.length
+                total:
+                    result.rows.length
 
-        });
+            });
 
 
-    } catch (error) {
+        } catch (error) {
 
-        console.error(
-            "❌ ERREUR PAIEMENTS :",
-            error.message
-        );
-
-        res.status(500).json({
-
-            success: false,
-
-            message:
-                "Impossible de récupérer les paiements.",
-
-            error:
+            console.error(
+                "❌ ERREUR APPRENANTS :",
                 error.message
+            );
 
-        });
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de récupérer les apprenants.",
+
+                error:
+                    error.message
+
+            });
+
+        }
 
     }
+);
 
-});
+
+/* =========================================================
+   RÉCUPÉRER LES PAIEMENTS
+========================================================= */
+
+app.get(
+    "/api/paiements",
+    async (req, res) => {
+
+        try {
+
+            const result =
+                await pool.query(
+
+                    `
+
+                    SELECT *
+
+                    FROM paiements
+
+                    ORDER BY id DESC
+
+                    `
+
+                );
+
+
+            res.json({
+
+                success: true,
+
+                data:
+                    result.rows,
+
+                total:
+                    result.rows.length
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "❌ ERREUR PAIEMENTS :",
+                error.message
+            );
+
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de récupérer les paiements.",
+
+                error:
+                    error.message
+
+            });
+
+        }
+
+    }
+);
 
 
 /* =========================================================
    ENREGISTRER UN PAIEMENT
 ========================================================= */
 
-app.post("/api/paiements", async (req, res) => {
+app.post(
+    "/api/paiements",
+    async (req, res) => {
 
-    try {
+        try {
 
-        const {
+            const {
 
-            idPaiement,
-            utilisateurID,
-            nom,
-            email,
-            offre,
-            montant,
-            devise,
-            methode,
-            capture,
-            statut
-
-        } = req.body;
-
-
-        if (!idPaiement || !email) {
-
-            return res.status(400).json({
-
-                success: false,
-
-                message:
-                    "ID paiement et email obligatoires."
-
-            });
-
-        }
-
-
-        const emailNormalise =
-            String(email)
-                .trim()
-                .toLowerCase();
-
-
-        const existe = await pool.query(`
-
-            SELECT id
-
-            FROM paiements
-
-            WHERE id_paiement = $1
-
-            LIMIT 1
-
-        `, [
-            idPaiement
-        ]);
-
-
-        if (existe.rows.length > 0) {
-
-            return res.status(409).json({
-
-                success: false,
-
-                message:
-                    "Ce paiement existe déjà."
-
-            });
-
-        }
-
-
-        const result = await pool.query(`
-
-            INSERT INTO paiements
-            (
-                id_paiement,
-                utilisateur_id,
+                idPaiement,
+                utilisateurID,
                 nom,
                 email,
                 offre,
@@ -807,129 +1350,254 @@ app.post("/api/paiements", async (req, res) => {
                 methode,
                 capture,
                 statut
-            )
 
-            VALUES
-            (
-                $1,
-                $2,
-                $3,
-                $4,
-                $5,
-                $6,
-                $7,
-                $8,
-                $9,
-                $10
-            )
-
-            RETURNING *
-
-        `, [
-
-            idPaiement,
-
-            utilisateurID || null,
-
-            nom || null,
-
-            emailNormalise,
-
-            offre || null,
-
-            montant || 0,
-
-            devise || "USD",
-
-            methode || null,
-
-            capture || null,
-
-            statut || "en_attente"
-
-        ]);
+            } = req.body;
 
 
-        res.status(201).json({
+            if (
+                !idPaiement ||
+                !email
+            ) {
 
-            success: true,
+                return res.status(400).json({
 
-            message:
-                "Paiement enregistré.",
+                    success: false,
 
-            data:
-                result.rows[0]
+                    message:
+                        "ID paiement et email obligatoires."
 
-        });
+                });
+
+            }
 
 
-    } catch (error) {
+            const emailNormalise =
+                String(email)
+                    .trim()
+                    .toLowerCase();
 
-        console.error(
-            "❌ ERREUR PAIEMENT :",
-            error.message
-        );
 
-        res.status(500).json({
+            /* ----------------------------------------------
+               DOUBLON
+            ---------------------------------------------- */
 
-            success: false,
+            const existe =
+                await pool.query(
 
-            message:
-                "Erreur lors de l'enregistrement du paiement.",
+                    `
 
-            error:
+                    SELECT id
+
+                    FROM paiements
+
+                    WHERE id_paiement = $1
+
+                    LIMIT 1
+
+                    `,
+
+                    [
+                        idPaiement
+                    ]
+
+                );
+
+
+            if (
+                existe.rows.length > 0
+            ) {
+
+                return res.status(409).json({
+
+                    success: false,
+
+                    message:
+                        "Ce paiement existe déjà."
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------
+               INSERTION
+            ---------------------------------------------- */
+
+            const result =
+                await pool.query(
+
+                    `
+
+                    INSERT INTO paiements
+                    (
+                        id_paiement,
+                        utilisateur_id,
+                        nom,
+                        email,
+                        offre,
+                        montant,
+                        devise,
+                        methode,
+                        capture,
+                        statut
+                    )
+
+                    VALUES
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5,
+                        $6,
+                        $7,
+                        $8,
+                        $9,
+                        $10
+                    )
+
+                    RETURNING *
+
+                    `,
+
+                    [
+
+                        idPaiement,
+
+                        utilisateurID ||
+                            null,
+
+                        nom ||
+                            null,
+
+                        emailNormalise,
+
+                        offre ||
+                            null,
+
+                        montant ||
+                            0,
+
+                        devise ||
+                            "USD",
+
+                        methode ||
+                            null,
+
+                        capture ||
+                            null,
+
+                        statut ||
+                            "en_attente"
+
+                    ]
+
+                );
+
+
+            res.status(201).json({
+
+                success: true,
+
+                message:
+                    "Paiement enregistré.",
+
+                data:
+                    result.rows[0]
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "❌ ERREUR PAIEMENT :",
                 error.message
+            );
 
-        });
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de l'enregistrement du paiement.",
+
+                error:
+                    error.message
+
+            });
+
+        }
 
     }
-
-});
+);
 
 
 /* =========================================================
    ROUTE INEXISTANTE
 ========================================================= */
 
-app.use((req, res) => {
+app.use(
+    (req, res) => {
 
-    res.status(404).json({
+        res.status(404).json({
 
-        success: false,
+            success: false,
 
-        message:
-            "Route introuvable.",
+            message:
+                "Route introuvable.",
 
-        route:
-            req.originalUrl
+            route:
+                req.originalUrl
 
-    });
+        });
 
-});
+    }
+);
 
 
 /* =========================================================
-   DEMARRAGE DU SERVEUR
+   DÉMARRAGE SERVEUR
 ========================================================= */
 
-app.listen(PORT, async () => {
+app.listen(
+    PORT,
+    async () => {
 
-    console.log("");
-    console.log("========================================");
-    console.log("🚀 BMJ SERVICE BACKEND");
-    console.log("========================================");
-    console.log("🌐 Port :", PORT);
-    console.log("========================================");
+        console.log("");
+
+        console.log(
+            "========================================"
+        );
+
+        console.log(
+            "🚀 BMJ SERVICE BACKEND"
+        );
+
+        console.log(
+            "========================================"
+        );
+
+        console.log(
+            "🌐 Port :",
+            PORT
+        );
+
+        console.log(
+            "========================================"
+        );
 
 
-    const connexion =
-        await testerDatabase();
+        const connexion =
+            await testerDatabase();
 
 
-    if (connexion) {
+        if (connexion) {
 
-        await creerTables();
+            await creerTables();
+
+        }
 
     }
-
-});
+);
