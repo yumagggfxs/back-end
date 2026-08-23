@@ -1,185 +1,1053 @@
-const express = require('express');
-const { Pool } = require('pg');
-const cors = require('cors');
+/*=========================================================
+        BMJ SERVICE
+        BACKEND NODE.JS
+        EXPRESS + POSTGRESQL
+=========================================================*/
+
+const express = require("express");
+const cors = require("cors");
+const { Pool } = require("pg");
+
+
+/*=========================================================
+        1. APPLICATION
+=========================================================*/
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
-app.use(cors());
 
-// Connection à la base PostgreSQL sur Render
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || 'postgresql://bmj_db_user:5FSX8YeJNzwinKdFOrIeEC43aQsuzf91@dpg-d9sdlt49v7es73emrq8g-a/bmj_db',
-    ssl: { rejectUnauthorized: false }
-});
 
-// Identifiants Administrateur Sécurisés (Intégrés avec secours par variables d'environnement)
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "direction@bmj.com";
-const ADMIN_SECRET_KEY = process.env.ADMIN_SECRET_KEY || "bmj2026@service";
+/*=========================================================
+        2. PORT
+=========================================================*/
 
-// Identifiants Airtel Money
-const AIRTEL_CLIENT_ID = process.env.AIRTEL_CLIENT_ID || "VOTRE_CLIENT_ID";
-const AIRTEL_CLIENT_SECRET = process.env.AIRTEL_CLIENT_SECRET || "VOTRE_CLIENT_SECRET";
-const AIRTEL_WEBHOOK_SECRET = process.env.AIRTEL_WEBHOOK_SECRET || "4a6b14aa75414105a9f8dd93d6ff3176";
-const AIRTEL_ENV_URL = process.env.AIRTEL_ENV_URL || "https://openapiuat.airtel.africa";
+const PORT =
+    process.env.PORT || 3000;
 
-// 👉 INITIALISATION DES TABLES POSTGRESQL
-pool.query(`
-    CREATE TABLE IF NOT EXISTS apprenants (
-        id SERIAL PRIMARY KEY,
-        nom VARCHAR(150) NOT NULL,
-        sexe VARCHAR(50),
-        pays VARCHAR(100),
-        telephone VARCHAR(50),
-        ville VARCHAR(100),
-        email VARCHAR(150) UNIQUE NOT NULL,
-        domaine VARCHAR(150),
-        niveau VARCHAR(100),
-        password VARCHAR(255) NOT NULL,
-        photo TEXT,
-        date_inscription TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+/*=========================================================
+        3. MIDDLEWARE
+=========================================================*/
+
+app.use(
+    cors({
+        origin: "*",
+        methods: [
+            "GET",
+            "POST",
+            "PATCH",
+            "PUT",
+            "DELETE",
+            "OPTIONS"
+        ],
+        allowedHeaders: [
+            "Content-Type",
+            "Authorization"
+        ]
+    })
+);
+
+
+app.use(
+    express.json({
+        limit: "10mb"
+    })
+);
+
+
+app.use(
+    express.urlencoded({
+        extended: true
+    })
+);
+
+
+/*=========================================================
+        4. CONNEXION POSTGRESQL
+=========================================================*/
+
+if (!process.env.DATABASE_URL) {
+
+    console.error(
+        "❌ DATABASE_URL n'est pas configurée."
     );
 
-    CREATE TABLE IF NOT EXISTS paiements (
-        id SERIAL PRIMARY KEY,
-        apprenant_id INT REFERENCES apprenants(id),
-        cours_nom VARCHAR(150) NOT NULL,
-        montant NUMERIC NOT NULL,
-        devise VARCHAR(10) DEFAULT 'CDF',
-        telephone_payeur VARCHAR(50) NOT NULL,
-        reference_transaction VARCHAR(100) UNIQUE,
-        statut VARCHAR(50) DEFAULT 'PENDING',
-        date_paiement TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+} else {
+
+    console.log(
+        "DATABASE_URL détectée."
     );
-`).then(() => {
-    console.log("✅ Tables PostgreSQL 'apprenants' et 'paiements' prêtes !");
-}).catch(err => {
-    console.error("❌ Erreur tables SQL :", err);
-});
 
-// 🔑 FONCTION : Obtenir le jeton d'authentification Airtel Money
-async function getAirtelToken() {
-    try {
-        const response = await fetch(`${AIRTEL_ENV_URL}/auth/oauth2/token`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                client_id: AIRTEL_CLIENT_ID,
-                client_secret: AIRTEL_CLIENT_SECRET,
-                grant_type: "client_credentials"
-            })
-        });
-
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(data.error_description || "Échec d'authentification Airtel");
-        }
-        return data.access_token;
-    } catch (error) {
-        console.error("Erreur Auth Airtel :", error.message);
-        throw new Error("Impossible de s'authentifier auprès d'Airtel Money.");
-    }
 }
 
-// 🛡️ ROUTE : Connexion Administrateur Sécurisée (POST)
-app.post('/api/admin/connexion', (req, res) => {
-    const { email, secretKey } = req.body;
 
-    if (email === ADMIN_EMAIL && secretKey === ADMIN_SECRET_KEY) {
-        return res.json({
-            success: true,
-            message: "Accès administrateur autorisé !",
-            data: {
-                nom: "Administrateur Principal BMJ",
-                email: ADMIN_EMAIL,
-                role: "admin",
-                premium: true
+const pool = new Pool({
+
+    connectionString:
+        process.env.DATABASE_URL,
+
+    ssl:
+        process.env.NODE_ENV === "production"
+            ? {
+                rejectUnauthorized: false
             }
-        });
-    }
+            : false
 
-    res.status(401).json({
-        success: false,
-        error: "Identifiant ou clé secrète administrateur incorrects."
-    });
 });
 
-// 💳 ROUTE : Enregistrer un nouvel apprenant (POST)
-app.post('/api/apprenants', async (req, res) => {
-    const { nom, sexe, pays, telephone, ville, email, domaine, niveau, password, photo } = req.body;
-    
+
+/*=========================================================
+        5. TEST CONNEXION DATABASE
+=========================================================*/
+
+async function testerDatabase() {
+
     try {
-        const query = `
-            INSERT INTO apprenants (nom, sexe, pays, telephone, ville, email, domaine, niveau, password, photo) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
-            RETURNING *;
-        `;
-        const values = [nom, sexe, pays, telephone, ville, email, domaine, niveau, password, photo];
-        
-        const newApprenant = await pool.query(query, values);
-        res.status(201).json({ success: true, data: newApprenant.rows[0] });
-    } catch (err) {
-        console.error("Erreur insertion :", err.message);
-        if (err.code === '23505') {
-            return res.status(400).json({ 
-                success: false, 
-                error: "Cet e-mail est déjà utilisé par un autre compte !" 
+
+        const resultat =
+            await pool.query(
+                "SELECT NOW() AS date"
+            );
+
+
+        console.log(
+            "========================================"
+        );
+
+        console.log(
+            "✅ PostgreSQL connecté"
+        );
+
+        console.log(
+            "Date serveur DB :",
+            resultat.rows[0].date
+        );
+
+        console.log(
+            "========================================"
+        );
+
+
+    } catch (erreur) {
+
+        console.error(
+            "❌ Impossible de se connecter à PostgreSQL."
+        );
+
+        console.error(
+            erreur.message
+        );
+
+    }
+
+}
+
+
+/*=========================================================
+        6. CREATION TABLE APPRENANTS
+=========================================================*/
+
+async function creerTableApprenants() {
+
+    const sql = `
+
+        CREATE TABLE IF NOT EXISTS apprenants (
+
+            id SERIAL PRIMARY KEY,
+
+            nom VARCHAR(150),
+
+            sexe VARCHAR(50),
+
+            pays VARCHAR(100),
+
+            telephone VARCHAR(50),
+
+            ville VARCHAR(100),
+
+            email VARCHAR(255) UNIQUE NOT NULL,
+
+            domaine VARCHAR(150),
+
+            niveau VARCHAR(100),
+
+            password TEXT,
+
+            photo TEXT,
+
+            premium BOOLEAN DEFAULT FALSE,
+
+            bloque BOOLEAN DEFAULT FALSE,
+
+            "isProfessional" BOOLEAN DEFAULT FALSE,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+        );
+
+    `;
+
+
+    try {
+
+        await pool.query(sql);
+
+
+        console.log(
+            "✅ Table apprenants prête."
+        );
+
+
+    } catch (erreur) {
+
+        console.error(
+            "❌ Erreur création table apprenants :"
+        );
+
+        console.error(
+            erreur.message
+        );
+
+    }
+
+}
+
+
+/*=========================================================
+        7. ROUTE PRINCIPALE
+=========================================================*/
+
+app.get(
+    "/",
+    function (req, res) {
+
+        res.json({
+
+            success: true,
+
+            message:
+                "BMJ SERVICE API fonctionne.",
+
+            api:
+                "/api/apprenants"
+
+        });
+
+    }
+);
+
+
+/*=========================================================
+        8. TEST DATABASE
+=========================================================*/
+
+app.get(
+    "/api/test-db",
+    async function (req, res) {
+
+        try {
+
+            const resultat =
+                await pool.query(
+                    "SELECT NOW() AS date"
+                );
+
+
+            res.json({
+
+                success: true,
+
+                message:
+                    "Connexion PostgreSQL réussie.",
+
+                date:
+                    resultat.rows[0].date
+
             });
+
+
+        } catch (erreur) {
+
+            console.error(
+                erreur
+            );
+
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur connexion PostgreSQL.",
+
+                error:
+                    erreur.message
+
+            });
+
         }
-        res.status(500).json({ success: false, error: "Erreur lors de l'enregistrement sur le serveur." });
+
     }
-});
+);
 
-// 🔑 ROUTE : Connexion apprenant (POST)
-app.post('/api/connexion', async (req, res) => {
-    const { identifiant, password } = req.body;
 
-    try {
-        let query = 'SELECT * FROM apprenants WHERE email = $1';
-        let values = [identifiant];
+/*=========================================================
+        9. GET TOUS LES APPRENANTS
+=========================================================*/
 
-        let utilisateur = await pool.query(query, values);
+app.get(
+    "/api/apprenants",
+    async function (req, res) {
 
-        if (utilisateur.rows.length === 0 && !isNaN(identifiant)) {
-            query = 'SELECT * FROM apprenants WHERE id = $1';
-            values = [parseInt(identifiant)];
-            utilisateur = await pool.query(query, values);
+        try {
+
+            console.log(
+                "GET /api/apprenants"
+            );
+
+
+            const resultat =
+                await pool.query(`
+
+                    SELECT
+
+                        id,
+                        nom,
+                        sexe,
+                        pays,
+                        telephone,
+                        ville,
+                        email,
+                        domaine,
+                        niveau,
+                        password,
+                        photo,
+                        premium,
+                        bloque,
+                        "isProfessional",
+                        created_at,
+                        updated_at
+
+                    FROM apprenants
+
+                    ORDER BY
+                        created_at DESC
+
+                `);
+
+
+            console.log(
+                "Nombre utilisateurs :",
+                resultat.rows.length
+            );
+
+
+            res.status(200).json({
+
+                success: true,
+
+                count:
+                    resultat.rows.length,
+
+                data:
+                    resultat.rows
+
+            });
+
+
+        } catch (erreur) {
+
+            console.error(
+                "GET /api/apprenants ERROR :",
+                erreur
+            );
+
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de récupérer les apprenants.",
+
+                error:
+                    erreur.message
+
+            });
+
         }
 
-        if (utilisateur.rows.length === 0) {
-            return res.status(400).json({ success: false, error: "Compte introuvable." });
+    }
+);
+
+
+/*=========================================================
+        10. GET UN APPRENANT PAR ID
+=========================================================*/
+
+app.get(
+    "/api/apprenants/:id",
+    async function (req, res) {
+
+        try {
+
+            const id =
+                Number(req.params.id);
+
+
+            if (
+                !Number.isInteger(id)
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "ID invalide."
+
+                });
+
+            }
+
+
+            const resultat =
+                await pool.query(
+
+                    `
+
+                    SELECT
+
+                        id,
+                        nom,
+                        sexe,
+                        pays,
+                        telephone,
+                        ville,
+                        email,
+                        domaine,
+                        niveau,
+                        password,
+                        photo,
+                        premium,
+                        bloque,
+                        "isProfessional",
+                        created_at,
+                        updated_at
+
+                    FROM apprenants
+
+                    WHERE id = $1
+
+                    `,
+
+                    [id]
+
+                );
+
+
+            if (
+                resultat.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable."
+
+                });
+
+            }
+
+
+            res.json({
+
+                success: true,
+
+                data:
+                    resultat.rows[0]
+
+            });
+
+
+        } catch (erreur) {
+
+            console.error(
+                erreur
+            );
+
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur serveur.",
+
+                error:
+                    erreur.message
+
+            });
+
         }
 
-        const apprenant = utilisateur.rows[0];
+    }
+);
 
-        if (apprenant.password !== password) {
-            return res.status(400).json({ success: false, error: "Mot de passe incorrect." });
+
+/*=========================================================
+        11. POST CREER APPRENANT
+=========================================================*/
+
+app.post(
+    "/api/apprenants",
+    async function (req, res) {
+
+        try {
+
+            console.log(
+                "========================================"
+            );
+
+            console.log(
+                "POST /api/apprenants"
+            );
+
+            console.log(
+                "Données reçues :",
+                req.body
+            );
+
+
+            const {
+
+                nom,
+                sexe,
+                pays,
+                telephone,
+                ville,
+                email,
+                domaine,
+                niveau,
+                password,
+                photo,
+                premium,
+                bloque,
+                isProfessional
+
+            } = req.body;
+
+
+            /*-----------------------------------------
+                VALIDATION EMAIL
+            -----------------------------------------*/
+
+            if (!email) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "L'adresse email est obligatoire."
+
+                });
+
+            }
+
+
+            const emailNormalise =
+                String(email)
+                    .trim()
+                    .toLowerCase();
+
+
+            /*-----------------------------------------
+                VERIFIER DOUBLON
+            -----------------------------------------*/
+
+            const existant =
+                await pool.query(
+
+                    `
+
+                    SELECT id
+                    FROM apprenants
+                    WHERE LOWER(email) = $1
+
+                    `,
+
+                    [emailNormalise]
+
+                );
+
+
+            if (
+                existant.rows.length > 0
+            ) {
+
+                return res.status(409).json({
+
+                    success: false,
+
+                    message:
+                        "Un utilisateur avec cet email existe déjà.",
+
+                    userId:
+                        existant.rows[0].id
+
+                });
+
+            }
+
+
+            /*-----------------------------------------
+                INSERTION
+            -----------------------------------------*/
+
+            const resultat =
+                await pool.query(
+
+                    `
+
+                    INSERT INTO apprenants (
+
+                        nom,
+                        sexe,
+                        pays,
+                        telephone,
+                        ville,
+                        email,
+                        domaine,
+                        niveau,
+                        password,
+                        photo,
+                        premium,
+                        bloque,
+                        "isProfessional"
+
+                    )
+
+                    VALUES (
+
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5,
+                        $6,
+                        $7,
+                        $8,
+                        $9,
+                        $10,
+                        $11,
+                        $12,
+                        $13
+
+                    )
+
+                    RETURNING *
+
+                    `,
+
+                    [
+
+                        nom || null,
+
+                        sexe || null,
+
+                        pays || null,
+
+                        telephone || null,
+
+                        ville || null,
+
+                        emailNormalise,
+
+                        domaine || null,
+
+                        niveau || null,
+
+                        password || null,
+
+                        photo || null,
+
+                        Boolean(premium),
+
+                        Boolean(bloque),
+
+                        Boolean(isProfessional)
+
+                    ]
+
+                );
+
+
+            console.log(
+                "Utilisateur créé :",
+                resultat.rows[0]
+            );
+
+
+            res.status(201).json({
+
+                success: true,
+
+                message:
+                    "Utilisateur enregistré avec succès.",
+
+                data:
+                    resultat.rows[0]
+
+            });
+
+
+        } catch (erreur) {
+
+            console.error(
+                "POST /api/apprenants ERROR :",
+                erreur
+            );
+
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible d'enregistrer l'utilisateur.",
+
+                error:
+                    erreur.message
+
+            });
+
         }
 
-        res.json({ 
-            success: true, 
-            message: "Connexion réussie !", 
-            data: apprenant 
+    }
+);
+
+
+/*=========================================================
+        12. PATCH MODIFIER APPRENANT
+=========================================================*/
+
+app.patch(
+    "/api/apprenants/:id",
+    async function (req, res) {
+
+        try {
+
+            const id =
+                Number(req.params.id);
+
+
+            if (
+                !Number.isInteger(id)
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "ID invalide."
+
+                });
+
+            }
+
+
+            const champsAutorises = [
+
+                "nom",
+                "sexe",
+                "pays",
+                "telephone",
+                "ville",
+                "email",
+                "domaine",
+                "niveau",
+                "password",
+                "photo",
+                "premium",
+                "bloque",
+                "isProfessional"
+
+            ];
+
+
+            const modifications = [];
+
+
+            const valeurs = [];
+
+
+            let compteur = 1;
+
+
+            for (
+                const champ
+                of champsAutorises
+            ) {
+
+                if (
+                    Object.prototype.hasOwnProperty.call(
+                        req.body,
+                        champ
+                    )
+                ) {
+
+                    modifications.push(
+                        `"${champ}" = $${compteur}`
+                    );
+
+
+                    let valeur =
+                        req.body[champ];
+
+
+                    if (
+                        [
+                            "premium",
+                            "bloque",
+                            "isProfessional"
+                        ].includes(champ)
+                    ) {
+
+                        valeur =
+                            Boolean(valeur);
+
+                    }
+
+
+                    if (
+                        champ === "email"
+                    ) {
+
+                        valeur =
+                            String(valeur)
+                                .trim()
+                                .toLowerCase();
+
+                    }
+
+
+                    valeurs.push(
+                        valeur
+                    );
+
+
+                    compteur++;
+
+                }
+
+            }
+
+
+            if (
+                modifications.length === 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Aucune donnée à modifier."
+
+                });
+
+            }
+
+
+            modifications.push(
+                `updated_at = CURRENT_TIMESTAMP`
+            );
+
+
+            valeurs.push(id);
+
+
+            const sql = `
+
+                UPDATE apprenants
+
+                SET
+
+                    ${modifications.join(", ")}
+
+                WHERE id = $${compteur}
+
+                RETURNING *
+
+            `;
+
+
+            const resultat =
+                await pool.query(
+                    sql,
+                    valeurs
+                );
+
+
+            if (
+                resultat.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable."
+
+                });
+
+            }
+
+
+            res.json({
+
+                success: true,
+
+                message:
+                    "Utilisateur modifié avec succès.",
+
+                data:
+                    resultat.rows[0]
+
+            });
+
+
+        } catch (erreur) {
+
+            console.error(
+                "PATCH ERROR :",
+                erreur
+            );
+
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de la modification.",
+
+                error:
+                    erreur.message
+
+            });
+
+        }
+
+    }
+);
+
+
+/*=========================================================
+        13. ROUTE 404
+=========================================================*/
+
+app.use(
+    function (req, res) {
+
+        res.status(404).json({
+
+            success: false,
+
+            message:
+                "Route introuvable.",
+
+            method:
+                req.method,
+
+            route:
+                req.originalUrl
+
         });
 
-    } catch (err) {
-        console.error("Erreur lors de la connexion :", err.message);
-        res.status(500).json({ success: false, error: "Erreur serveur lors de la connexion." });
     }
-});
+);
 
-// 📜 ROUTE : Lister tous les apprenants (GET)
-app.get('/api/apprenants', async (req, res) => {
-    try {
-        const allApprenants = await pool.query('SELECT * FROM apprenants ORDER BY date_inscription DESC');
-        res.json(allApprenants.rows);
-    } catch (err) {
-        console.error("Erreur lecture :", err.message);
-        res.status(500).json({ success: false, error: "Erreur serveur" });
+
+/*=========================================================
+        14. ERREUR GLOBALE
+=========================================================*/
+
+app.use(
+    function (
+        erreur,
+        req,
+        res,
+        next
+    ) {
+
+        console.error(
+            "ERREUR GLOBALE :",
+            erreur
+        );
+
+
+        res.status(500).json({
+
+            success: false,
+
+            message:
+                "Erreur interne du serveur.",
+
+            error:
+                erreur.message
+
+        });
+
     }
-});
+);
 
-// Lancement du serveur Express
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🚀 Serveur BMJ démarré sur le port ${PORT}`);
-});
+
+/*=========================================================
+        15. DEMARRAGE
+=========================================================*/
+
+async function demarrerServeur() {
+
+    await testerDatabase();
+
+    await creerTableApprenants();
+
+
+    app.listen(
+        PORT,
+        function () {
+
+            console.log(
+                "========================================"
+            );
+
+            console.log(
+                "🚀 BMJ SERVICE BACKEND"
+            );
+
+            console.log(
+                `Port : ${PORT}`
+            );
+
+            console.log(
+                `API : http://localhost:${PORT}/api/apprenants`
+            );
+
+            console.log(
+                "========================================"
+            );
+
+        }
+    );
+
+}
+
+
+demarrerServeur();
