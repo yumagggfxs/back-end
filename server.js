@@ -4,26 +4,30 @@
    NODE.JS + EXPRESS + POSTGRESQL
    RENDER
 
-   VERSION : 8.0.0
+   VERSION : 9.0.0
 
-   CORRECTIONS :
+   FONCTIONNALITÉS
    ---------------------------------------------------------
-   - Suppression définitive de id_paiement
-   - Clé primaire paiement = id
-   - Communication Admin ↔ API ↔ PostgreSQL
+   - Inscription
+   - Connexion
+   - Login par email ou téléphone
+   - Hash sécurisé du mot de passe
    - Gestion utilisateurs
    - Gestion paiements
    - Validation paiement
    - Refus paiement
    - Activation Premium
    - Blocage utilisateur
-   - Suppression
-   - Statistiques
+   - Suppression utilisateur
+   - Statistiques admin
    - Health check
-   - Liste complète des routes
+   - Test PostgreSQL
+   - Compatibilité anciennes routes
    - Compatibilité anciens noms de champs
    - Création automatique des tables
-   - Migration de certaines anciennes colonnes
+   - Création automatique des index
+   - Routes /api/routes
+   - Gestion 404
 ========================================================= */
 
 "use strict";
@@ -35,6 +39,7 @@
 
 const express = require("express");
 const cors = require("cors");
+const crypto = require("crypto");
 const { Pool } = require("pg");
 
 
@@ -49,23 +54,11 @@ const PORT =
 
 
 /* =========================================================
-   3. CONFIGURATION POSTGRESQL
+   3. POSTGRESQL
 ========================================================= */
 
-/*
-   IMPORTANT :
-
-   Cette URL correspond à ta base PostgreSQL Render.
-
-   Pour une version de production plus sécurisée,
-   il est recommandé d'utiliser :
-
-   process.env.DATABASE_URL
-
-   Mais cette version accepte directement l'URL.
-*/
-
 const DATABASE_URL =
+    process.env.DATABASE_URL ||
     "postgresql://bmj_db_user:5FSX8YeJNzwinKdFOrIeEC43aQsuzf91@dpg-d9sdlt49v7es73emrq8g-a/bmj_db";
 
 
@@ -74,13 +67,11 @@ const pool = new Pool({
     connectionString:
         DATABASE_URL,
 
-    ssl:
-        {
-            rejectUnauthorized: false
-        },
+    ssl: {
+        rejectUnauthorized: false
+    },
 
-    max:
-        10,
+    max: 10,
 
     idleTimeoutMillis:
         30000,
@@ -92,7 +83,7 @@ const pool = new Pool({
 
 
 /* =========================================================
-   4. MIDDLEWARES
+   4. CORS
 ========================================================= */
 
 app.use(
@@ -120,6 +111,10 @@ app.use(
 
 );
 
+
+/* =========================================================
+   5. BODY
+========================================================= */
 
 app.use(
 
@@ -149,7 +144,7 @@ app.use(
 
 
 /* =========================================================
-   5. LOG DES REQUÊTES
+   6. LOG
 ========================================================= */
 
 app.use(
@@ -158,6 +153,7 @@ app.use(
 
         const debut =
             Date.now();
+
 
         res.on(
 
@@ -168,13 +164,17 @@ app.use(
                 const duree =
                     Date.now() - debut;
 
+
                 console.log(
+
                     `[API] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${duree}ms)`
+
                 );
 
             }
 
         );
+
 
         next();
 
@@ -184,19 +184,22 @@ app.use(
 
 
 /* =========================================================
-   6. OUTILS
+   7. OUTILS JSON
 ========================================================= */
 
 function succes(
+
     res,
+
     data = null,
+
     message = "Opération réussie."
+
 ) {
 
     return res.json({
 
-        success:
-            true,
+        success: true,
 
         message,
 
@@ -208,22 +211,33 @@ function succes(
 
 
 function erreur(
+
     res,
+
     status = 500,
+
     message = "Une erreur est survenue.",
+
     error = null
+
 ) {
 
     console.error(
+
         "[API ERROR]",
+
         message,
-        error?.message || error || ""
+
+        error?.message ||
+        error ||
+        ""
+
     );
+
 
     return res.status(status).json({
 
-        success:
-            false,
+        success: false,
 
         message,
 
@@ -236,6 +250,63 @@ function erreur(
                 )
 
     });
+
+}
+
+
+/* =========================================================
+   8. OUTILS
+========================================================= */
+
+function premier(
+
+    objet,
+
+    ...cles
+
+) {
+
+    if (!objet) {
+
+        return null;
+
+    }
+
+
+    for (
+
+        const cle of cles
+
+    ) {
+
+        if (
+
+            objet[cle] !== undefined &&
+            objet[cle] !== null
+
+        ) {
+
+            return objet[cle];
+
+        }
+
+    }
+
+
+    return null;
+
+}
+
+
+function entier(valeur) {
+
+    const n =
+        Number(valeur);
+
+
+    return Number.isInteger(n)
+        ? n
+        : null;
 
 }
 
@@ -257,74 +328,215 @@ function booleanValeur(value) {
 }
 
 
-function premier(
-    objet,
-    ...cles
-) {
-
-    if (!objet) {
-
-        return null;
-
-    }
-
-    for (
-        const cle of cles
-    ) {
-
-        if (
-            objet[cle] !== undefined &&
-            objet[cle] !== null
-        ) {
-
-            return objet[cle];
-
-        }
-
-    }
-
-    return null;
-
-}
-
-
-function entier(
-    valeur
-) {
+function montantValide(valeur) {
 
     const n =
         Number(valeur);
 
-    return Number.isInteger(n)
-        ? n
-        : null;
-
-}
-
-
-function montantValide(
-    valeur
-) {
-
-    const n =
-        Number(valeur);
 
     if (
+
         !Number.isFinite(n) ||
         n <= 0
+
     ) {
 
         return null;
 
     }
+
 
     return n;
 
 }
 
 
+function nettoyerTexte(valeur) {
+
+    if (
+
+        valeur === undefined ||
+        valeur === null
+
+    ) {
+
+        return "";
+
+    }
+
+
+    return String(valeur).trim();
+
+}
+
+
+function nettoyerEmail(email) {
+
+    return nettoyerTexte(email)
+        .toLowerCase();
+
+}
+
+
 /* =========================================================
-   7. NORMALISATION UTILISATEUR
+   9. HASH MOT DE PASSE
+========================================================= */
+
+/*
+   Aucun package supplémentaire nécessaire.
+
+   Utilisation de crypto.scryptSync de Node.js.
+
+   Format :
+
+   scrypt:salt:hash
+*/
+
+function hashPassword(password) {
+
+    const motDePasse =
+        String(password || "");
+
+
+    const salt =
+        crypto.randomBytes(16)
+            .toString("hex");
+
+
+    const hash =
+        crypto.scryptSync(
+
+            motDePasse,
+
+            salt,
+
+            64
+
+        ).toString("hex");
+
+
+    return `scrypt:${salt}:${hash}`;
+
+}
+
+
+function verifierPassword(
+
+    password,
+
+    storedPassword
+
+) {
+
+    if (
+
+        !password ||
+        !storedPassword
+
+    ) {
+
+        return false;
+
+    }
+
+
+    const stored =
+        String(storedPassword);
+
+
+    /*
+       Nouveau format sécurisé
+    */
+
+    if (
+
+        stored.startsWith("scrypt:")
+
+    ) {
+
+        const parties =
+            stored.split(":");
+
+
+        if (
+            parties.length !== 3
+        ) {
+
+            return false;
+
+        }
+
+
+        const salt =
+            parties[1];
+
+
+        const hash =
+            parties[2];
+
+
+        try {
+
+            const nouveauHash =
+                crypto.scryptSync(
+
+                    String(password),
+
+                    salt,
+
+                    64
+
+                ).toString("hex");
+
+
+            return (
+
+                nouveauHash.length ===
+                hash.length &&
+
+                crypto.timingSafeEqual(
+
+                    Buffer.from(
+                        nouveauHash,
+                        "utf8"
+                    ),
+
+                    Buffer.from(
+                        hash,
+                        "utf8"
+                    )
+
+                )
+
+            );
+
+        }
+
+        catch (error) {
+
+            return false;
+
+        }
+
+    }
+
+
+    /*
+       Compatibilité ancienne base :
+
+       Si un ancien mot de passe
+       était enregistré en clair,
+       on le vérifie une dernière fois.
+    */
+
+    return stored ===
+        String(password);
+
+}
+
+
+/* =========================================================
+   10. NORMALISATION UTILISATEUR
 ========================================================= */
 
 function utilisateurJSON(row) {
@@ -335,16 +547,21 @@ function utilisateurJSON(row) {
 
     }
 
+
     const premium =
         Boolean(
+
             row.premium ||
             row.is_premium
+
         );
+
 
     const bloque =
         Boolean(
             row.bloque
         );
+
 
     return {
 
@@ -408,7 +625,94 @@ function utilisateurJSON(row) {
 
 
 /* =========================================================
-   8. NORMALISATION PAIEMENT
+   11. UTILISATEUR POUR AUTHENTIFICATION
+========================================================= */
+
+function utilisateurAuthJSON(row) {
+
+    if (!row) {
+
+        return null;
+
+    }
+
+
+    return {
+
+        id:
+            row.id,
+
+        utilisateurID:
+            row.id,
+
+        utilisateur_id:
+            row.id,
+
+        user_id:
+            row.id,
+
+        userId:
+            row.id,
+
+        userID:
+            row.id,
+
+        nom:
+            row.nom || "",
+
+        name:
+            row.nom || "",
+
+        email:
+            row.email || "",
+
+        telephone:
+            row.telephone || "",
+
+        phone:
+            row.telephone || "",
+
+        domaine:
+            row.domaine || "",
+
+        photo:
+            row.photo || "",
+
+        premium:
+            Boolean(
+                row.premium ||
+                row.is_premium
+            ),
+
+        is_premium:
+            Boolean(
+                row.premium ||
+                row.is_premium
+            ),
+
+        isPremium:
+            Boolean(
+                row.premium ||
+                row.is_premium
+            ),
+
+        bloque:
+            Boolean(
+                row.bloque
+            ),
+
+        blocked:
+            Boolean(
+                row.bloque
+            )
+
+    };
+
+}
+
+
+/* =========================================================
+   12. NORMALISATION PAIEMENT
 ========================================================= */
 
 function paiementJSON(row) {
@@ -419,35 +723,31 @@ function paiementJSON(row) {
 
     }
 
+
     const montant =
         Number(
             row.montant || 0
         );
 
+
     const statut =
         row.statut ||
         "en_attente";
+
 
     const preuve =
         row.preuve ||
         "";
 
+
     const reference =
         row.reference ||
         "";
 
+
     return {
 
         ...row,
-
-        /*
-           IMPORTANT :
-
-           La seule clé primaire du paiement
-           est maintenant :
-
-           id
-        */
 
         id:
             row.id,
@@ -576,15 +876,18 @@ function paiementJSON(row) {
 
 
 /* =========================================================
-   9. TEST POSTGRESQL
+   13. TEST DB
 ========================================================= */
 
 async function testerDB() {
 
     const result =
         await pool.query(
+
             "SELECT NOW() AS maintenant"
+
         );
+
 
     return result.rows[0];
 
@@ -592,7 +895,7 @@ async function testerDB() {
 
 
 /* =========================================================
-   10. CREATION TABLE UTILISATEURS
+   14. TABLE UTILISATEURS
 ========================================================= */
 
 async function creerTableUtilisateurs() {
@@ -633,7 +936,7 @@ async function creerTableUtilisateurs() {
 
 
 /* =========================================================
-   11. CREATION TABLE PAIEMENTS
+   15. TABLE PAIEMENTS
 ========================================================= */
 
 async function creerTablePaiements() {
@@ -702,12 +1005,12 @@ async function creerTablePaiements() {
 
 
 /* =========================================================
-   12. AJOUT DES COLONNES MANQUANTES
+   16. COLONNES MANQUANTES
 ========================================================= */
 
 async function ajouterColonnesManquantes() {
 
-    const colonnesUtilisateurs = [
+    const utilisateurs = [
 
         [
             "mot_de_passe",
@@ -753,7 +1056,7 @@ async function ajouterColonnesManquantes() {
 
 
     for (
-        const [nom, type] of colonnesUtilisateurs
+        const [nom, type] of utilisateurs
     ) {
 
         await pool.query(`
@@ -769,7 +1072,7 @@ async function ajouterColonnesManquantes() {
     }
 
 
-    const colonnesPaiements = [
+    const paiements = [
 
         [
             "utilisateur_id",
@@ -875,7 +1178,7 @@ async function ajouterColonnesManquantes() {
 
 
     for (
-        const [nom, type] of colonnesPaiements
+        const [nom, type] of paiements
     ) {
 
         await pool.query(`
@@ -894,7 +1197,7 @@ async function ajouterColonnesManquantes() {
 
 
 /* =========================================================
-   13. INDEX
+   17. INDEX
 ========================================================= */
 
 async function creerIndexes() {
@@ -905,6 +1208,16 @@ async function creerIndexes() {
         idx_utilisateurs_email
 
         ON utilisateurs(email)
+
+    `);
+
+
+    await pool.query(`
+
+        CREATE INDEX IF NOT EXISTS
+        idx_utilisateurs_telephone
+
+        ON utilisateurs(telephone)
 
     `);
 
@@ -942,13 +1255,13 @@ async function creerIndexes() {
 
 
 /* =========================================================
-   14. INITIALISATION BASE
+   18. INITIALISATION
 ========================================================= */
 
 async function initialiserBase() {
 
     console.log(
-        "Initialisation de PostgreSQL..."
+        "Initialisation PostgreSQL..."
     );
 
 
@@ -969,7 +1282,7 @@ async function initialiserBase() {
 
 
 /* =========================================================
-   15. ROUTE RACINE
+   19. ROUTE /
 ========================================================= */
 
 app.get(
@@ -980,6 +1293,7 @@ app.get(
 
         let database =
             "offline";
+
 
         try {
 
@@ -1001,20 +1315,18 @@ app.get(
 
         return res.json({
 
-            success:
-                true,
+            success: true,
 
             message:
                 "BMJ SERVICE API fonctionne.",
 
             version:
-                "8.0.0",
+                "9.0.0",
 
             server:
                 "Node.js + Express",
 
-            database:
-                database,
+            database,
 
             status:
                 "online",
@@ -1030,7 +1342,7 @@ app.get(
 
 
 /* =========================================================
-   16. ROUTE API
+   20. /api
 ========================================================= */
 
 app.get(
@@ -1041,14 +1353,13 @@ app.get(
 
         return res.json({
 
-            success:
-                true,
+            success: true,
 
             message:
                 "BMJ SERVICE API",
 
             version:
-                "8.0.0",
+                "9.0.0",
 
             routes:
                 "/api/routes"
@@ -1061,7 +1372,7 @@ app.get(
 
 
 /* =========================================================
-   17. ROUTES DISPONIBLES
+   21. ROUTES
 ========================================================= */
 
 app.get(
@@ -1072,11 +1383,10 @@ app.get(
 
         return res.json({
 
-            success:
-                true,
+            success: true,
 
             version:
-                "8.0.0",
+                "9.0.0",
 
             routes: [
 
@@ -1104,6 +1414,42 @@ app.get(
                     method: "GET",
                     path: "/api/test-db"
                 },
+
+
+                /* AUTH */
+
+                {
+                    method: "POST",
+                    path: "/api/inscription"
+                },
+
+                {
+                    method: "POST",
+                    path: "/api/register"
+                },
+
+                {
+                    method: "POST",
+                    path: "/api/auth/register"
+                },
+
+                {
+                    method: "POST",
+                    path: "/api/connexion"
+                },
+
+                {
+                    method: "POST",
+                    path: "/api/login"
+                },
+
+                {
+                    method: "POST",
+                    path: "/api/auth/login"
+                },
+
+
+                /* UTILISATEURS */
 
                 {
                     method: "GET",
@@ -1135,6 +1481,9 @@ app.get(
                     path: "/api/utilisateurs/:id"
                 },
 
+
+                /* USERS */
+
                 {
                     method: "GET",
                     path: "/api/users"
@@ -1149,6 +1498,9 @@ app.get(
                     method: "POST",
                     path: "/api/users"
                 },
+
+
+                /* PAIEMENTS */
 
                 {
                     method: "GET",
@@ -1195,9 +1547,17 @@ app.get(
                     path: "/api/payments"
                 },
 
+
+                /* ADMIN */
+
                 {
                     method: "GET",
                     path: "/api/admin/statistiques"
+                },
+
+                {
+                    method: "GET",
+                    path: "/api/statistiques"
                 }
 
             ]
@@ -1210,7 +1570,7 @@ app.get(
 
 
 /* =========================================================
-   18. HEALTH
+   22. HEALTH
 ========================================================= */
 
 app.get(
@@ -1225,10 +1585,10 @@ app.get(
                 "SELECT 1"
             );
 
+
             return res.json({
 
-                success:
-                    true,
+                success: true,
 
                 status:
                     "online",
@@ -1237,7 +1597,7 @@ app.get(
                     "online",
 
                 version:
-                    "8.0.0",
+                    "9.0.0",
 
                 timestamp:
                     new Date().toISOString()
@@ -1250,8 +1610,7 @@ app.get(
 
             return res.status(503).json({
 
-                success:
-                    false,
+                success: false,
 
                 status:
                     "offline",
@@ -1275,7 +1634,7 @@ app.get(
 
 
 /* =========================================================
-   19. TEST DATABASE
+   23. TEST DB
 ========================================================= */
 
 app.get(
@@ -1289,10 +1648,10 @@ app.get(
             const result =
                 await testerDB();
 
+
             return res.json({
 
-                success:
-                    true,
+                success: true,
 
                 message:
                     "PostgreSQL fonctionne.",
@@ -1309,11 +1668,8 @@ app.get(
             return erreur(
 
                 res,
-
                 500,
-
                 "Erreur PostgreSQL.",
-
                 error
 
             );
@@ -1326,7 +1682,784 @@ app.get(
 
 
 /* =========================================================
-   20. GET UTILISATEURS
+   24. INSCRIPTION
+========================================================= */
+
+/*
+   Routes :
+
+   POST /api/inscription
+   POST /api/register
+   POST /api/auth/register
+
+   Champs acceptés :
+
+   nom / name
+   email
+   telephone / phone
+   mot_de_passe / motDePasse / password
+   domaine
+   photo
+*/
+
+async function inscription(
+
+    req,
+    res
+
+) {
+
+    try {
+
+        const body =
+            req.body || {};
+
+
+        const nom =
+            nettoyerTexte(
+
+                premier(
+
+                    body,
+
+                    "nom",
+                    "name"
+
+                )
+
+            );
+
+
+        const email =
+            nettoyerEmail(
+
+                premier(
+
+                    body,
+
+                    "email"
+
+                )
+
+            );
+
+
+        const telephone =
+            nettoyerTexte(
+
+                premier(
+
+                    body,
+
+                    "telephone",
+                    "phone"
+
+                )
+
+            );
+
+
+        const motDePasse =
+            String(
+
+                premier(
+
+                    body,
+
+                    "mot_de_passe",
+                    "motDePasse",
+                    "password"
+
+                ) || ""
+
+            );
+
+
+        const domaine =
+            nettoyerTexte(
+
+                premier(
+
+                    body,
+
+                    "domaine",
+                    "domain"
+
+                )
+
+            );
+
+
+        const photo =
+            nettoyerTexte(
+
+                premier(
+
+                    body,
+
+                    "photo",
+                    "image"
+
+                )
+
+            );
+
+
+        /* ==========================================
+           VALIDATIONS
+        ========================================== */
+
+        if (!nom) {
+
+            return erreur(
+
+                res,
+                400,
+                "Le nom est obligatoire."
+
+            );
+
+        }
+
+
+        if (!email && !telephone) {
+
+            return erreur(
+
+                res,
+                400,
+                "L'email ou le numéro de téléphone est obligatoire."
+
+            );
+
+        }
+
+
+        if (motDePasse.length < 4) {
+
+            return erreur(
+
+                res,
+                400,
+                "Le mot de passe doit contenir au moins 4 caractères."
+
+            );
+
+        }
+
+
+        /* ==========================================
+           VERIFICATION EMAIL / TELEPHONE
+        ========================================== */
+
+        let ancien;
+
+
+        if (email && telephone) {
+
+            ancien =
+                await pool.query(
+
+                    `
+
+                    SELECT *
+
+                    FROM utilisateurs
+
+                    WHERE
+
+                        LOWER(email) = LOWER($1)
+
+                        OR
+
+                        telephone = $2
+
+                    LIMIT 1
+
+                    `,
+
+                    [
+                        email,
+                        telephone
+                    ]
+
+                );
+
+        }
+
+        else if (email) {
+
+            ancien =
+                await pool.query(
+
+                    `
+
+                    SELECT *
+
+                    FROM utilisateurs
+
+                    WHERE LOWER(email) = LOWER($1)
+
+                    LIMIT 1
+
+                    `,
+
+                    [email]
+
+                );
+
+        }
+
+        else {
+
+            ancien =
+                await pool.query(
+
+                    `
+
+                    SELECT *
+
+                    FROM utilisateurs
+
+                    WHERE telephone = $1
+
+                    LIMIT 1
+
+                    `,
+
+                    [telephone]
+
+                );
+
+        }
+
+
+        if (ancien.rows.length) {
+
+            const existant =
+                ancien.rows[0];
+
+
+            if (
+
+                email &&
+                existant.email &&
+                existant.email.toLowerCase() ===
+                email.toLowerCase()
+
+            ) {
+
+                return erreur(
+
+                    res,
+                    409,
+                    "Cette adresse email est déjà utilisée."
+
+                );
+
+            }
+
+
+            if (
+
+                telephone &&
+                existant.telephone ===
+                telephone
+
+            ) {
+
+                return erreur(
+
+                    res,
+                    409,
+                    "Ce numéro de téléphone est déjà utilisé."
+
+                );
+
+            }
+
+
+            return erreur(
+
+                res,
+                409,
+                "Ce compte existe déjà."
+
+            );
+
+        }
+
+
+        /* ==========================================
+           HASH
+        ========================================== */
+
+        const motDePasseHash =
+            hashPassword(
+                motDePasse
+            );
+
+
+        /* ==========================================
+           CREATION
+        ========================================== */
+
+        const result =
+            await pool.query(
+
+                `
+
+                INSERT INTO utilisateurs (
+
+                    nom,
+
+                    email,
+
+                    telephone,
+
+                    mot_de_passe,
+
+                    domaine,
+
+                    photo,
+
+                    premium,
+
+                    is_premium,
+
+                    bloque
+
+                )
+
+                VALUES (
+
+                    $1,
+
+                    $2,
+
+                    $3,
+
+                    $4,
+
+                    $5,
+
+                    $6,
+
+                    FALSE,
+
+                    FALSE,
+
+                    FALSE
+
+                )
+
+                RETURNING *
+
+                `,
+
+                [
+
+                    nom,
+
+                    email,
+
+                    telephone,
+
+                    motDePasseHash,
+
+                    domaine,
+
+                    photo
+
+                ]
+
+            );
+
+
+        const utilisateur =
+            result.rows[0];
+
+
+        return res.status(201).json({
+
+            success: true,
+
+            message:
+                "Inscription réussie.",
+
+            data:
+                utilisateurAuthJSON(
+                    utilisateur
+                ),
+
+            utilisateur:
+                utilisateurAuthJSON(
+                    utilisateur
+                ),
+
+            user:
+                utilisateurAuthJSON(
+                    utilisateur
+                )
+
+        });
+
+    }
+
+    catch (error) {
+
+        return erreur(
+
+            res,
+            500,
+            "Impossible de créer le compte.",
+            error
+
+        );
+
+    }
+
+}
+
+
+/* =========================================================
+   25. ALIASES INSCRIPTION
+========================================================= */
+
+app.post(
+    "/api/inscription",
+    inscription
+);
+
+
+app.post(
+    "/api/register",
+    inscription
+);
+
+
+app.post(
+    "/api/auth/register",
+    inscription
+);
+
+
+/* =========================================================
+   26. CONNEXION
+========================================================= */
+
+/*
+   Routes :
+
+   POST /api/connexion
+   POST /api/login
+   POST /api/auth/login
+
+   Champs acceptés :
+
+   email
+   telephone / phone
+   identifiant / identifier
+   password / mot_de_passe / motDePasse
+*/
+
+async function connexion(
+
+    req,
+    res
+
+) {
+
+    try {
+
+        const body =
+            req.body || {};
+
+
+        const identifiant =
+            nettoyerTexte(
+
+                premier(
+
+                    body,
+
+                    "email",
+                    "telephone",
+                    "phone",
+                    "identifiant",
+                    "identifier",
+                    "username"
+
+                )
+
+            );
+
+
+        const motDePasse =
+            String(
+
+                premier(
+
+                    body,
+
+                    "password",
+                    "mot_de_passe",
+                    "motDePasse"
+
+                ) || ""
+
+            );
+
+
+        if (!identifiant) {
+
+            return erreur(
+
+                res,
+                400,
+                "L'email ou le numéro de téléphone est obligatoire."
+
+            );
+
+        }
+
+
+        if (!motDePasse) {
+
+            return erreur(
+
+                res,
+                400,
+                "Le mot de passe est obligatoire."
+
+            );
+
+        }
+
+
+        /* ==========================================
+           RECHERCHE UTILISATEUR
+        ========================================== */
+
+        const result =
+            await pool.query(
+
+                `
+
+                SELECT *
+
+                FROM utilisateurs
+
+                WHERE
+
+                    LOWER(email) = LOWER($1)
+
+                    OR
+
+                    telephone = $1
+
+                LIMIT 1
+
+                `,
+
+                [identifiant]
+
+            );
+
+
+        if (!result.rows.length) {
+
+            return erreur(
+
+                res,
+                401,
+                "Identifiants incorrects."
+
+            );
+
+        }
+
+
+        const utilisateur =
+            result.rows[0];
+
+
+        /* ==========================================
+           COMPTE BLOQUÉ
+        ========================================== */
+
+        if (
+            Boolean(
+                utilisateur.bloque
+            )
+        ) {
+
+            return erreur(
+
+                res,
+                403,
+                "Ce compte est bloqué. Contactez l'administration."
+
+            );
+
+        }
+
+
+        /* ==========================================
+           VERIFICATION MOT DE PASSE
+        ========================================== */
+
+        const valide =
+            verifierPassword(
+
+                motDePasse,
+
+                utilisateur.mot_de_passe
+
+            );
+
+
+        if (!valide) {
+
+            return erreur(
+
+                res,
+                401,
+                "Identifiants incorrects."
+
+            );
+
+        }
+
+
+        /* ==========================================
+           MIGRATION AUTOMATIQUE
+           ANCIEN MOT DE PASSE EN CLAIR
+        ========================================== */
+
+        if (
+
+            utilisateur.mot_de_passe &&
+
+            !String(
+                utilisateur.mot_de_passe
+            ).startsWith("scrypt:")
+
+        ) {
+
+            const nouveauHash =
+                hashPassword(
+                    motDePasse
+                );
+
+
+            await pool.query(
+
+                `
+
+                UPDATE utilisateurs
+
+                SET
+
+                    mot_de_passe = $1,
+
+                    updated_at = NOW()
+
+                WHERE id = $2
+
+                `,
+
+                [
+                    nouveauHash,
+                    utilisateur.id
+                ]
+
+            );
+
+
+            utilisateur.mot_de_passe =
+                nouveauHash;
+
+        }
+
+
+        /* ==========================================
+           REPONSE
+        ========================================== */
+
+        const user =
+            utilisateurAuthJSON(
+                utilisateur
+            );
+
+
+        return res.json({
+
+            success: true,
+
+            message:
+                "Connexion réussie.",
+
+            data:
+                user,
+
+            utilisateur:
+                user,
+
+            user:
+
+                user,
+
+            authenticated:
+                true,
+
+            connexion:
+                true
+
+        });
+
+    }
+
+    catch (error) {
+
+        return erreur(
+
+            res,
+            500,
+            "Impossible de se connecter.",
+            error
+
+        );
+
+    }
+
+}
+
+
+/* =========================================================
+   27. ALIASES CONNEXION
+========================================================= */
+
+app.post(
+    "/api/connexion",
+    connexion
+);
+
+
+app.post(
+    "/api/login",
+    connexion
+);
+
+
+app.post(
+    "/api/auth/login",
+    connexion
+);
+
+
+/* =========================================================
+   28. GET UTILISATEURS
 ========================================================= */
 
 app.get(
@@ -1368,11 +2501,8 @@ app.get(
             return erreur(
 
                 res,
-
                 500,
-
                 "Impossible de récupérer les utilisateurs.",
-
                 error
 
             );
@@ -1385,7 +2515,7 @@ app.get(
 
 
 /* =========================================================
-   21. GET USERS ALIAS
+   29. GET USERS
 ========================================================= */
 
 app.get(
@@ -1427,11 +2557,8 @@ app.get(
             return erreur(
 
                 res,
-
                 500,
-
                 "Impossible de récupérer les utilisateurs.",
-
                 error
 
             );
@@ -1444,557 +2571,343 @@ app.get(
 
 
 /* =========================================================
-   22. GET UTILISATEUR
+   30. GET UTILISATEUR PAR ID
 ========================================================= */
 
-app.get(
+async function getUtilisateur(
 
+    req,
+    res
+
+) {
+
+    try {
+
+        const id =
+            entier(
+                req.params.id
+            );
+
+
+        if (!id) {
+
+            return erreur(
+
+                res,
+                400,
+                "ID utilisateur invalide."
+
+            );
+
+        }
+
+
+        const result =
+            await pool.query(
+
+                `
+
+                SELECT *
+
+                FROM utilisateurs
+
+                WHERE id = $1
+
+                `,
+
+                [id]
+
+            );
+
+
+        if (!result.rows.length) {
+
+            return erreur(
+
+                res,
+                404,
+                "Utilisateur introuvable."
+
+            );
+
+        }
+
+
+        return succes(
+
+            res,
+
+            utilisateurJSON(
+                result.rows[0]
+            ),
+
+            "Utilisateur récupéré."
+
+        );
+
+    }
+
+    catch (error) {
+
+        return erreur(
+
+            res,
+            500,
+            "Impossible de récupérer l'utilisateur.",
+            error
+
+        );
+
+    }
+
+}
+
+
+app.get(
     "/api/utilisateurs/:id",
-
-    async (req, res) => {
-
-        try {
-
-            const id =
-                entier(
-                    req.params.id
-                );
-
-
-            if (!id) {
-
-                return erreur(
-
-                    res,
-
-                    400,
-
-                    "ID utilisateur invalide."
-
-                );
-
-            }
-
-
-            const result =
-                await pool.query(
-
-                    `
-
-                    SELECT *
-
-                    FROM utilisateurs
-
-                    WHERE id = $1
-
-                    `,
-
-                    [id]
-
-                );
-
-
-            if (!result.rows.length) {
-
-                return erreur(
-
-                    res,
-
-                    404,
-
-                    "Utilisateur introuvable."
-
-                );
-
-            }
-
-
-            return succes(
-
-                res,
-
-                utilisateurJSON(
-                    result.rows[0]
-                ),
-
-                "Utilisateur récupéré."
-
-            );
-
-        }
-
-        catch (error) {
-
-            return erreur(
-
-                res,
-
-                500,
-
-                "Impossible de récupérer l'utilisateur.",
-
-                error
-
-            );
-
-        }
-
-    }
-
+    getUtilisateur
 );
 
-
-/* =========================================================
-   23. GET USER PAR ID
-========================================================= */
 
 app.get(
-
     "/api/users/:id",
-
-    async (req, res) => {
-
-        try {
-
-            const id =
-                entier(
-                    req.params.id
-                );
-
-
-            if (!id) {
-
-                return erreur(
-
-                    res,
-
-                    400,
-
-                    "ID utilisateur invalide."
-
-                );
-
-            }
-
-
-            const result =
-                await pool.query(
-
-                    `
-
-                    SELECT *
-
-                    FROM utilisateurs
-
-                    WHERE id = $1
-
-                    `,
-
-                    [id]
-
-                );
-
-
-            if (!result.rows.length) {
-
-                return erreur(
-
-                    res,
-
-                    404,
-
-                    "Utilisateur introuvable."
-
-                );
-
-            }
-
-
-            return succes(
-
-                res,
-
-                utilisateurJSON(
-                    result.rows[0]
-                ),
-
-                "Utilisateur récupéré."
-
-            );
-
-        }
-
-        catch (error) {
-
-            return erreur(
-
-                res,
-
-                500,
-
-                "Impossible de récupérer l'utilisateur.",
-
-                error
-
-            );
-
-        }
-
-    }
-
+    getUtilisateur
 );
 
 
 /* =========================================================
-   24. CREER UTILISATEUR
+   31. CREER UTILISATEUR
 ========================================================= */
 
-app.post(
+async function creerUtilisateur(
 
+    req,
+    res
+
+) {
+
+    try {
+
+        const body =
+            req.body || {};
+
+
+        const nom =
+            nettoyerTexte(
+
+                premier(
+                    body,
+                    "nom",
+                    "name"
+                )
+
+            );
+
+
+        const email =
+            nettoyerEmail(
+                body.email
+            );
+
+
+        const telephone =
+            nettoyerTexte(
+
+                premier(
+                    body,
+                    "telephone",
+                    "phone"
+                )
+
+            );
+
+
+        const motDePasse =
+            String(
+
+                premier(
+
+                    body,
+
+                    "mot_de_passe",
+                    "motDePasse",
+                    "password"
+
+                ) || ""
+
+            );
+
+
+        const domaine =
+            nettoyerTexte(
+                body.domaine
+            );
+
+
+        const photo =
+            nettoyerTexte(
+                body.photo
+            );
+
+
+        const premium =
+            booleanValeur(
+
+                premier(
+
+                    body,
+
+                    "premium",
+                    "is_premium",
+                    "isPremium"
+
+                )
+
+            );
+
+
+        const bloque =
+            booleanValeur(
+
+                premier(
+
+                    body,
+
+                    "bloque",
+                    "blocked"
+
+                )
+
+            );
+
+
+        let passwordFinal = "";
+
+
+        if (motDePasse) {
+
+            passwordFinal =
+                hashPassword(
+                    motDePasse
+                );
+
+        }
+
+
+        const result =
+            await pool.query(
+
+                `
+
+                INSERT INTO utilisateurs (
+
+                    nom,
+
+                    email,
+
+                    telephone,
+
+                    mot_de_passe,
+
+                    domaine,
+
+                    photo,
+
+                    premium,
+
+                    is_premium,
+
+                    bloque
+
+                )
+
+                VALUES (
+
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $7,
+                    $8
+
+                )
+
+                RETURNING *
+
+                `,
+
+                [
+
+                    nom,
+                    email,
+                    telephone,
+                    passwordFinal,
+                    domaine,
+                    photo,
+                    premium,
+                    bloque
+
+                ]
+
+            );
+
+
+        return res.status(201).json({
+
+            success: true,
+
+            message:
+                "Utilisateur créé.",
+
+            data:
+                utilisateurJSON(
+                    result.rows[0]
+                )
+
+        });
+
+    }
+
+    catch (error) {
+
+        return erreur(
+
+            res,
+            500,
+            "Impossible de créer l'utilisateur.",
+            error
+
+        );
+
+    }
+
+}
+
+
+app.post(
     "/api/utilisateurs",
-
-    async (req, res) => {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const nom =
-                String(
-                    premier(
-                        body,
-                        "nom",
-                        "name"
-                    ) || ""
-                );
-
-
-            const email =
-                String(
-                    premier(
-                        body,
-                        "email"
-                    ) || ""
-                );
-
-
-            const telephone =
-                String(
-                    premier(
-                        body,
-                        "telephone",
-                        "phone"
-                    ) || ""
-                );
-
-
-            const motDePasse =
-                String(
-                    premier(
-                        body,
-                        "mot_de_passe",
-                        "motDePasse",
-                        "password"
-                    ) || ""
-                );
-
-
-            const domaine =
-                String(
-                    premier(
-                        body,
-                        "domaine",
-                        "domain"
-                    ) || ""
-                );
-
-
-            const photo =
-                String(
-                    premier(
-                        body,
-                        "photo",
-                        "image"
-                    ) || ""
-                );
-
-
-            const premium =
-                booleanValeur(
-                    premier(
-                        body,
-                        "premium",
-                        "is_premium",
-                        "isPremium"
-                    )
-                );
-
-
-            const bloque =
-                booleanValeur(
-                    premier(
-                        body,
-                        "bloque",
-                        "blocked"
-                    )
-                );
-
-
-            const result =
-                await pool.query(
-
-                    `
-
-                    INSERT INTO utilisateurs (
-
-                        nom,
-                        email,
-                        telephone,
-                        mot_de_passe,
-                        domaine,
-                        photo,
-                        premium,
-                        is_premium,
-                        bloque
-
-                    )
-
-                    VALUES (
-
-                        $1,
-                        $2,
-                        $3,
-                        $4,
-                        $5,
-                        $6,
-                        $7,
-                        $7,
-                        $8
-
-                    )
-
-                    RETURNING *
-
-                    `,
-
-                    [
-
-                        nom,
-                        email,
-                        telephone,
-                        motDePasse,
-                        domaine,
-                        photo,
-                        premium,
-                        bloque
-
-                    ]
-
-                );
-
-
-            return succes(
-
-                res,
-
-                utilisateurJSON(
-                    result.rows[0]
-                ),
-
-                "Utilisateur créé."
-
-            );
-
-        }
-
-        catch (error) {
-
-            return erreur(
-
-                res,
-
-                500,
-
-                "Impossible de créer l'utilisateur.",
-
-                error
-
-            );
-
-        }
-
-    }
-
+    creerUtilisateur
 );
 
-
-/* =========================================================
-   25. CREER USER ALIAS
-========================================================= */
 
 app.post(
-
     "/api/users",
-
-    async (req, res) => {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const nom =
-                String(
-                    premier(
-                        body,
-                        "nom",
-                        "name"
-                    ) || ""
-                );
-
-
-            const email =
-                String(
-                    body.email || ""
-                );
-
-
-            const telephone =
-                String(
-                    premier(
-                        body,
-                        "telephone",
-                        "phone"
-                    ) || ""
-                );
-
-
-            const motDePasse =
-                String(
-                    premier(
-                        body,
-                        "mot_de_passe",
-                        "motDePasse",
-                        "password"
-                    ) || ""
-                );
-
-
-            const domaine =
-                String(
-                    body.domaine || ""
-                );
-
-
-            const photo =
-                String(
-                    body.photo || ""
-                );
-
-
-            const premium =
-                booleanValeur(
-                    premier(
-                        body,
-                        "premium",
-                        "is_premium",
-                        "isPremium"
-                    )
-                );
-
-
-            const result =
-                await pool.query(
-
-                    `
-
-                    INSERT INTO utilisateurs (
-
-                        nom,
-                        email,
-                        telephone,
-                        mot_de_passe,
-                        domaine,
-                        photo,
-                        premium,
-                        is_premium
-
-                    )
-
-                    VALUES (
-
-                        $1,
-                        $2,
-                        $3,
-                        $4,
-                        $5,
-                        $6,
-                        $7,
-                        $7
-
-                    )
-
-                    RETURNING *
-
-                    `,
-
-                    [
-
-                        nom,
-                        email,
-                        telephone,
-                        motDePasse,
-                        domaine,
-                        photo,
-                        premium
-
-                    ]
-
-                );
-
-
-            return succes(
-
-                res,
-
-                utilisateurJSON(
-                    result.rows[0]
-                ),
-
-                "Utilisateur créé."
-
-            );
-
-        }
-
-        catch (error) {
-
-            return erreur(
-
-                res,
-                500,
-                "Impossible de créer l'utilisateur.",
-                error
-
-            );
-
-        }
-
-    }
-
+    creerUtilisateur
 );
 
 
 /* =========================================================
-   26. MODIFIER UTILISATEUR
+   32. MODIFIER UTILISATEUR
 ========================================================= */
 
 async function modifierUtilisateur(
+
     req,
     res
+
 ) {
 
     try {
@@ -2028,13 +2941,18 @@ async function modifierUtilisateur(
 
 
         function ajouter(
-            nom,
+
+            colonne,
             valeur
+
         ) {
 
             champs.push(
-                `${nom} = $${valeurs.length + 1}`
+
+                `${colonne} = $${valeurs.length + 1}`
+
             );
+
 
             valeurs.push(
                 valeur
@@ -2044,20 +2962,24 @@ async function modifierUtilisateur(
 
 
         if (
+
             body.nom !== undefined ||
             body.name !== undefined
+
         ) {
 
             ajouter(
 
                 "nom",
 
-                String(
+                nettoyerTexte(
+
                     premier(
                         body,
                         "nom",
                         "name"
-                    ) || ""
+                    )
+
                 )
 
             );
@@ -2073,8 +2995,8 @@ async function modifierUtilisateur(
 
                 "email",
 
-                String(
-                    body.email || ""
+                nettoyerEmail(
+                    body.email
                 )
 
             );
@@ -2083,20 +3005,24 @@ async function modifierUtilisateur(
 
 
         if (
+
             body.telephone !== undefined ||
             body.phone !== undefined
+
         ) {
 
             ajouter(
 
                 "telephone",
 
-                String(
+                nettoyerTexte(
+
                     premier(
                         body,
                         "telephone",
                         "phone"
-                    ) || ""
+                    )
+
                 )
 
             );
@@ -2105,25 +3031,42 @@ async function modifierUtilisateur(
 
 
         if (
+
             body.mot_de_passe !== undefined ||
             body.motDePasse !== undefined ||
             body.password !== undefined
+
         ) {
 
-            ajouter(
-
-                "mot_de_passe",
-
+            const password =
                 String(
+
                     premier(
+
                         body,
+
                         "mot_de_passe",
                         "motDePasse",
                         "password"
-                    ) || ""
-                )
 
-            );
+                    ) || ""
+
+                );
+
+
+            if (password) {
+
+                ajouter(
+
+                    "mot_de_passe",
+
+                    hashPassword(
+                        password
+                    )
+
+                );
+
+            }
 
         }
 
@@ -2136,8 +3079,8 @@ async function modifierUtilisateur(
 
                 "domaine",
 
-                String(
-                    body.domaine || ""
+                nettoyerTexte(
+                    body.domaine
                 )
 
             );
@@ -2153,8 +3096,8 @@ async function modifierUtilisateur(
 
                 "photo",
 
-                String(
-                    body.photo || ""
+                nettoyerTexte(
+                    body.photo
                 )
 
             );
@@ -2163,19 +3106,26 @@ async function modifierUtilisateur(
 
 
         if (
+
             body.premium !== undefined ||
             body.is_premium !== undefined ||
             body.isPremium !== undefined
+
         ) {
 
             const premium =
                 booleanValeur(
+
                     premier(
+
                         body,
+
                         "premium",
                         "is_premium",
                         "isPremium"
+
                     )
+
                 );
 
 
@@ -2194,8 +3144,10 @@ async function modifierUtilisateur(
 
 
         if (
+
             body.bloque !== undefined ||
             body.blocked !== undefined
+
         ) {
 
             ajouter(
@@ -2203,11 +3155,16 @@ async function modifierUtilisateur(
                 "bloque",
 
                 booleanValeur(
+
                     premier(
+
                         body,
+
                         "bloque",
                         "blocked"
+
                     )
+
                 )
 
             );
@@ -2246,6 +3203,7 @@ async function modifierUtilisateur(
                 UPDATE utilisateurs
 
                 SET
+
                     ${champs.join(", ")}
 
                 WHERE id = $${valeurs.length}
@@ -2315,7 +3273,7 @@ app.patch(
 
 
 /* =========================================================
-   27. SUPPRIMER UTILISATEUR
+   33. SUPPRIMER UTILISATEUR
 ========================================================= */
 
 app.delete(
@@ -2407,27 +3365,17 @@ app.delete(
 
 
 /* =========================================================
-   28. GET PAIEMENTS
+   34. GET PAIEMENTS
 ========================================================= */
 
 async function recupererPaiements(
+
     req,
     res
+
 ) {
 
     try {
-
-        /*
-           IMPORTANT :
-
-           Nous utilisons UNIQUEMENT :
-
-           p.id
-
-           Jamais :
-
-           id_paiement
-        */
 
         const result =
             await pool.query(`
@@ -2524,7 +3472,6 @@ async function recupererPaiements(
         return erreur(
 
             res,
-
             500,
             "Impossible de récupérer les paiements.",
             error
@@ -2549,12 +3496,14 @@ app.get(
 
 
 /* =========================================================
-   29. GET PAIEMENT PAR ID
+   35. PAIEMENT PAR ID
 ========================================================= */
 
 async function recupererPaiement(
+
     req,
     res
+
 ) {
 
     try {
@@ -2568,9 +3517,11 @@ async function recupererPaiement(
         if (!id) {
 
             return erreur(
+
                 res,
                 400,
                 "ID paiement invalide."
+
             );
 
         }
@@ -2669,7 +3620,7 @@ app.get(
 
 
 /* =========================================================
-   30. CREER PAIEMENT
+   36. CREER PAIEMENT
 ========================================================= */
 
 app.post(
@@ -2703,8 +3654,10 @@ app.post(
 
 
             if (
+
                 rawUserId !== null &&
                 rawUserId !== ""
+
             ) {
 
                 utilisateurId =
@@ -2789,110 +3742,141 @@ app.post(
 
 
             const nom =
-                String(
+                nettoyerTexte(
+
                     premier(
                         body,
                         "nom",
                         "name"
-                    ) || ""
+                    )
+
                 );
 
 
             const email =
-                String(
-                    body.email || ""
+                nettoyerEmail(
+                    body.email
                 );
 
 
             const telephone =
-                String(
+                nettoyerTexte(
+
                     premier(
                         body,
                         "telephone",
                         "phone"
-                    ) || ""
+                    )
+
                 );
 
 
             const devise =
-                String(
+                nettoyerTexte(
+
                     premier(
                         body,
                         "devise",
                         "currency"
-                    ) || "USD"
-                );
+                    )
+
+                ) || "USD";
 
 
             const methode =
-                String(
+                nettoyerTexte(
+
                     premier(
+
                         body,
+
                         "methode",
                         "method",
                         "mode_paiement",
                         "payment_method"
-                    ) || ""
+
+                    )
+
                 );
 
 
             const numero =
-                String(
+                nettoyerTexte(
+
                     premier(
+
                         body,
+
                         "numero_operateur",
                         "numeroOperateur",
                         "operator_number",
                         "numero"
-                    ) || ""
+
+                    )
+
                 );
 
 
             const statut =
-                String(
+                nettoyerTexte(
+
                     premier(
+
                         body,
+
                         "statut",
                         "status",
                         "etat"
-                    ) || "en_attente"
-                );
+
+                    )
+
+                ) || "en_attente";
 
 
             const reference =
-                String(
+                nettoyerTexte(
+
                     premier(
+
                         body,
+
                         "reference",
                         "transaction_id",
                         "transactionId"
-                    ) || ""
+
+                    )
+
                 );
 
 
             const preuve =
-                String(
+                nettoyerTexte(
+
                     premier(
+
                         body,
+
                         "preuve",
                         "proof",
                         "capture",
                         "image",
                         "preuve_paiement",
                         "capture_paiement"
-                    ) || ""
+
+                    )
+
                 );
 
 
             const origine =
-                String(
-                    body.origine || ""
+                nettoyerTexte(
+                    body.origine
                 );
 
 
             const source =
-                String(
-                    body.source || ""
+                nettoyerTexte(
+                    body.source
                 );
 
 
@@ -2912,7 +3896,7 @@ app.post(
 
 
             const note =
-                String(
+                nettoyerTexte(
 
                     premier(
 
@@ -2921,7 +3905,7 @@ app.post(
                         "note",
                         "commentaire"
 
-                    ) || ""
+                    )
 
                 );
 
@@ -2943,19 +3927,24 @@ app.post(
                 new Date();
 
 
-            if (
-                dateRaw &&
-                !Number.isNaN(
-                    new Date(
-                        dateRaw
-                    ).getTime()
-                )
-            ) {
+            if (dateRaw) {
 
-                datePaiement =
+                const d =
                     new Date(
                         dateRaw
                     );
+
+
+                if (
+                    !Number.isNaN(
+                        d.getTime()
+                    )
+                ) {
+
+                    datePaiement =
+                        d;
+
+                }
 
             }
 
@@ -3058,17 +4047,19 @@ app.post(
                 );
 
 
-            return succes(
+            return res.status(201).json({
 
-                res,
+                success: true,
 
-                paiementJSON(
-                    result.rows[0]
-                ),
+                message:
+                    "Paiement enregistré.",
 
-                "Paiement enregistré."
+                data:
+                    paiementJSON(
+                        result.rows[0]
+                    )
 
-            );
+            });
 
         }
 
@@ -3091,12 +4082,14 @@ app.post(
 
 
 /* =========================================================
-   31. MODIFIER PAIEMENT
+   37. MODIFIER PAIEMENT
 ========================================================= */
 
 async function modifierPaiement(
+
     req,
     res
+
 ) {
 
     try {
@@ -3130,13 +4123,18 @@ async function modifierPaiement(
 
 
         function ajouter(
+
             colonne,
             valeur
+
         ) {
 
             champs.push(
+
                 `${colonne} = $${valeurs.length + 1}`
+
             );
+
 
             valeurs.push(
                 valeur
@@ -3147,10 +4145,13 @@ async function modifierPaiement(
 
         const statut =
             premier(
+
                 body,
+
                 "statut",
                 "status",
                 "etat"
+
             );
 
 
@@ -3158,7 +4159,7 @@ async function modifierPaiement(
 
             ajouter(
                 "statut",
-                String(statut)
+                nettoyerTexte(statut)
             );
 
         }
@@ -3179,8 +4180,13 @@ async function modifierPaiement(
         if (reference !== null) {
 
             ajouter(
+
                 "reference",
-                String(reference || "")
+
+                nettoyerTexte(
+                    reference
+                )
+
             );
 
         }
@@ -3204,8 +4210,13 @@ async function modifierPaiement(
         if (preuve !== null) {
 
             ajouter(
+
                 "preuve",
-                String(preuve || "")
+
+                nettoyerTexte(
+                    preuve
+                )
+
             );
 
         }
@@ -3225,14 +4236,24 @@ async function modifierPaiement(
         if (note !== null) {
 
             ajouter(
+
                 "note",
-                String(note || "")
+
+                nettoyerTexte(
+                    note
+                )
+
             );
 
 
             ajouter(
+
                 "commentaire",
-                String(note || "")
+
+                nettoyerTexte(
+                    note
+                )
+
             );
 
         }
@@ -3269,6 +4290,7 @@ async function modifierPaiement(
                 UPDATE paiements
 
                 SET
+
                     ${champs.join(", ")}
 
                 WHERE id = $${valeurs.length}
@@ -3338,7 +4360,7 @@ app.patch(
 
 
 /* =========================================================
-   32. VALIDER PAIEMENT
+   38. VALIDER PAIEMENT
 ========================================================= */
 
 app.patch(
@@ -3440,14 +4462,6 @@ app.patch(
             );
 
 
-            /*
-               Activation Premium.
-
-               Si le paiement possède un
-               utilisateur_id valide, le compte
-               devient Premium immédiatement.
-            */
-
             if (p.utilisateur_id) {
 
                 await client.query(
@@ -3548,7 +4562,7 @@ app.patch(
 
 
 /* =========================================================
-   33. REFUSER PAIEMENT
+   39. REFUSER PAIEMENT
 ========================================================= */
 
 app.patch(
@@ -3579,13 +4593,16 @@ app.patch(
 
 
             const note =
-                String(
+                nettoyerTexte(
 
-                    req.body?.note ||
+                    premier(
 
-                    req.body?.commentaire ||
+                        req.body || {},
 
-                    ""
+                        "note",
+                        "commentaire"
+
+                    )
 
                 );
 
@@ -3614,10 +4631,8 @@ app.patch(
                     `,
 
                     [
-
                         note,
                         id
-
                     ]
 
                 );
@@ -3669,7 +4684,7 @@ app.patch(
 
 
 /* =========================================================
-   34. SUPPRIMER PAIEMENT
+   40. SUPPRIMER PAIEMENT
 ========================================================= */
 
 app.delete(
@@ -3763,222 +4778,222 @@ app.delete(
 
 
 /* =========================================================
-   35. STATISTIQUES ADMIN
+   41. STATISTIQUES ADMIN
 ========================================================= */
+
+async function statistiquesAdmin(
+
+    req,
+    res
+
+) {
+
+    try {
+
+        const result =
+            await pool.query(`
+
+                SELECT
+
+                    (
+
+                        SELECT COUNT(*)
+
+                        FROM utilisateurs
+
+                    ) AS total_utilisateurs,
+
+
+                    (
+
+                        SELECT COUNT(*)
+
+                        FROM utilisateurs
+
+                        WHERE
+
+                            premium = TRUE
+
+                            OR
+
+                            is_premium = TRUE
+
+                    ) AS total_premium,
+
+
+                    (
+
+                        SELECT COUNT(*)
+
+                        FROM utilisateurs
+
+                        WHERE bloque = TRUE
+
+                    ) AS total_bloques,
+
+
+                    (
+
+                        SELECT COUNT(*)
+
+                        FROM paiements
+
+                        WHERE statut =
+                            'en_attente'
+
+                    ) AS total_paiements_attente,
+
+
+                    (
+
+                        SELECT COUNT(*)
+
+                        FROM paiements
+
+                        WHERE statut =
+                            'valide'
+
+                    ) AS total_paiements_valides,
+
+
+                    (
+
+                        SELECT COUNT(*)
+
+                        FROM paiements
+
+                        WHERE statut =
+                            'refuse'
+
+                    ) AS total_paiements_refuses,
+
+
+                    (
+
+                        SELECT COUNT(*)
+
+                        FROM paiements
+
+                    ) AS total_paiements,
+
+
+                    (
+
+                        SELECT COALESCE(
+
+                            SUM(montant),
+
+                            0
+
+                        )
+
+                        FROM paiements
+
+                        WHERE statut =
+                            'valide'
+
+                    ) AS montant_total_valide
+
+            `);
+
+
+        const data =
+            result.rows[0];
+
+
+        const statistiques = {
+
+            total_utilisateurs:
+                Number(
+                    data.total_utilisateurs
+                ),
+
+            total_premium:
+                Number(
+                    data.total_premium
+                ),
+
+            total_bloques:
+                Number(
+                    data.total_bloques
+                ),
+
+            total_paiements_attente:
+                Number(
+                    data.total_paiements_attente
+                ),
+
+            total_paiements_valides:
+                Number(
+                    data.total_paiements_valides
+                ),
+
+            total_paiements_refuses:
+                Number(
+                    data.total_paiements_refuses
+                ),
+
+            total_paiements:
+                Number(
+                    data.total_paiements
+                ),
+
+            montant_total_valide:
+                Number(
+                    data.montant_total_valide
+                )
+
+        };
+
+
+        return succes(
+
+            res,
+
+            statistiques,
+
+            "Statistiques récupérées."
+
+        );
+
+    }
+
+    catch (error) {
+
+        return erreur(
+
+            res,
+            500,
+            "Impossible de récupérer les statistiques.",
+            error
+
+        );
+
+    }
+
+}
+
 
 app.get(
 
     "/api/admin/statistiques",
 
-    async (req, res) => {
-
-        try {
-
-            const result =
-                await pool.query(`
-
-                    SELECT
-
-                        (
-
-                            SELECT COUNT(*)
-
-                            FROM utilisateurs
-
-                        ) AS total_utilisateurs,
-
-
-                        (
-
-                            SELECT COUNT(*)
-
-                            FROM utilisateurs
-
-                            WHERE
-
-                                premium = TRUE
-
-                                OR
-
-                                is_premium = TRUE
-
-                        ) AS total_premium,
-
-
-                        (
-
-                            SELECT COUNT(*)
-
-                            FROM utilisateurs
-
-                            WHERE bloque = TRUE
-
-                        ) AS total_bloques,
-
-
-                        (
-
-                            SELECT COUNT(*)
-
-                            FROM paiements
-
-                            WHERE statut =
-                                'en_attente'
-
-                        ) AS total_paiements_attente,
-
-
-                        (
-
-                            SELECT COUNT(*)
-
-                            FROM paiements
-
-                            WHERE statut =
-                                'valide'
-
-                        ) AS total_paiements_valides,
-
-
-                        (
-
-                            SELECT COUNT(*)
-
-                            FROM paiements
-
-                            WHERE statut =
-                                'refuse'
-
-                        ) AS total_paiements_refuses,
-
-
-                        (
-
-                            SELECT COUNT(*)
-
-                            FROM paiements
-
-                        ) AS total_paiements,
-
-
-                        (
-
-                            SELECT COALESCE(
-                                SUM(montant),
-                                0
-                            )
-
-                            FROM paiements
-
-                            WHERE statut =
-                                'valide'
-
-                        ) AS montant_total_valide
-
-                `);
-
-
-            const data =
-                result.rows[0];
-
-
-            return succes(
-
-                res,
-
-                {
-
-                    total_utilisateurs:
-                        Number(
-                            data.total_utilisateurs
-                        ),
-
-                    total_premium:
-                        Number(
-                            data.total_premium
-                        ),
-
-                    total_bloques:
-                        Number(
-                            data.total_bloques
-                        ),
-
-                    total_paiements_attente:
-                        Number(
-                            data.total_paiements_attente
-                        ),
-
-                    total_paiements_valides:
-                        Number(
-                            data.total_paiements_valides
-                        ),
-
-                    total_paiements_refuses:
-                        Number(
-                            data.total_paiements_refuses
-                        ),
-
-                    total_paiements:
-                        Number(
-                            data.total_paiements
-                        ),
-
-                    montant_total_valide:
-                        Number(
-                            data.montant_total_valide
-                        )
-
-                },
-
-                "Statistiques récupérées."
-
-            );
-
-        }
-
-        catch (error) {
-
-            return erreur(
-
-                res,
-                500,
-                "Impossible de récupérer les statistiques.",
-                error
-
-            );
-
-        }
-
-    }
+    statistiquesAdmin
 
 );
 
-
-/* =========================================================
-   36. ALIAS STATISTIQUES
-========================================================= */
 
 app.get(
 
     "/api/statistiques",
 
-    async (req, res) => {
-
-        req.url =
-            "/api/admin/statistiques";
-
-        return res.redirect(
-            307,
-            "/api/admin/statistiques"
-        );
-
-    }
+    statistiquesAdmin
 
 );
 
 
 /* =========================================================
-   37. 404
+   42. ROUTE 404
 ========================================================= */
 
 app.use(
@@ -3987,8 +5002,7 @@ app.use(
 
         return res.status(404).json({
 
-            success:
-                false,
+            success: false,
 
             message:
                 "Route API introuvable.",
@@ -4010,7 +5024,7 @@ app.use(
 
 
 /* =========================================================
-   38. ERREUR GLOBALE
+   43. ERREUR GLOBALE
 ========================================================= */
 
 app.use(
@@ -4018,22 +5032,28 @@ app.use(
     (errorGlobal, req, res, next) => {
 
         console.error(
+
             "ERREUR GLOBALE :",
+
             errorGlobal
+
         );
 
 
         return res.status(500).json({
 
-            success:
-                false,
+            success: false,
 
             message:
                 "Erreur interne du serveur.",
 
             error:
-                process.env.NODE_ENV === "production"
+
+                process.env.NODE_ENV ===
+                "production"
+
                     ? ""
+
                     : errorGlobal.message
 
         });
@@ -4044,7 +5064,7 @@ app.use(
 
 
 /* =========================================================
-   39. DEMARRAGE
+   44. DEMARRAGE
 ========================================================= */
 
 async function demarrerServeur() {
@@ -4060,7 +5080,7 @@ async function demarrerServeur() {
         );
 
         console.log(
-            "VERSION 8.0.0"
+            "VERSION 9.0.0"
         );
 
         console.log(
@@ -4106,6 +5126,14 @@ async function demarrerServeur() {
                 );
 
                 console.log(
+                    "Inscription : /api/inscription"
+                );
+
+                console.log(
+                    "Connexion : /api/connexion"
+                );
+
+                console.log(
                     "=============================================="
                 );
 
@@ -4143,7 +5171,7 @@ async function demarrerServeur() {
 
 
 /* =========================================================
-   40. ARRET PROPRE
+   45. ARRÊT PROPRE
 ========================================================= */
 
 async function arretPropre() {
@@ -4151,6 +5179,7 @@ async function arretPropre() {
     console.log(
         "Arrêt de BMJ SERVICE..."
     );
+
 
     try {
 
@@ -4165,6 +5194,7 @@ async function arretPropre() {
         );
 
     }
+
 
     process.exit(
         0
@@ -4186,7 +5216,7 @@ process.on(
 
 
 /* =========================================================
-   41. LANCEMENT
+   46. LANCEMENT
 ========================================================= */
 
 demarrerServeur();
