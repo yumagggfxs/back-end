@@ -4,36 +4,65 @@
    NODE.JS + EXPRESS + POSTGRESQL
    RENDER
 
-   VERSION : 6.0.0
+   VERSION : 5.0.0
 
-   =========================================================
-   FONCTIONNALITÉS
+   NOUVELLES FONCTIONNALITÉS
    ---------------------------------------------------------
    ✓ Inscription utilisateur
    ✓ Connexion utilisateur
    ✓ Connexion administrateur
-   ✓ Vérification administrateur
    ✓ Gestion des apprenants
    ✓ Activation / désactivation Premium
-   ✓ Paiements depuis le site
-   ✓ Paiements reçus par email
+   ✓ Paiements envoyés depuis le site
+   ✓ Paiements reçus par EMAIL
    ✓ Ajout manuel d'un paiement par ADMIN
    ✓ Ajout / modification d'une preuve
    ✓ Recherche rapide des paiements
-   ✓ Pagination
    ✓ Validation paiement
    ✓ Refus paiement
    ✓ Activation automatique Premium
    ✓ Transactions PostgreSQL
    ✓ Index PostgreSQL
+   ✓ Pagination
+   ✓ Optimisation des requêtes
    ✓ Compatibilité anciens champs frontend
-   ✓ Statistiques
-   ✓ Health check
-   ✓ Gestion propre des erreurs
-   ✓ Optimisation connexion PostgreSQL
-   ✓ Compatible Render
-   =========================================================
-*/
+
+   ROUTES UTILISATEURS
+   ---------------------------------------------------------
+   GET     /
+   GET     /api/test-db
+
+   POST    /api/inscription
+   POST    /api/connexion
+
+   ROUTES ADMIN
+   ---------------------------------------------------------
+   POST    /api/admin/connexion
+   GET     /api/admin/verifier
+
+   ROUTES APPRENANTS
+   ---------------------------------------------------------
+   GET     /api/apprenants
+   GET     /api/apprenants/:id
+   PUT     /api/apprenants/:id/premium
+
+   ROUTES PAIEMENTS
+   ---------------------------------------------------------
+   GET     /api/paiements
+   GET     /api/paiements/recherche
+   GET     /api/paiements/:id
+
+   POST    /api/paiements
+   POST    /api/admin/paiements
+
+   PUT     /api/paiements/:id/preuve
+   PUT     /api/paiements/:id/valider
+   PUT     /api/paiements/:id/refuser
+
+   DEBUG
+   ---------------------------------------------------------
+   GET     /api/debug/routes
+   ========================================================= */
 
 
 /* =========================================================
@@ -46,7 +75,7 @@ const { Pool } = require("pg");
 
 
 /* =========================================================
-   2. APPLICATION EXPRESS
+   2. APPLICATION
 ========================================================= */
 
 const app = express();
@@ -56,40 +85,48 @@ const app = express();
    3. PORT
 ========================================================= */
 
-const PORT = process.env.PORT || 3000;
+const PORT =
+    process.env.PORT || 3000;
 
 
 /* =========================================================
-   4. CONFIGURATION DATABASE
+   4. DATABASE
 ========================================================= */
 
 /*
-   IMPORTANT :
+   ==========================================================
+   IMPORTANT
+   ==========================================================
 
-   SUR RENDER :
+   Tu peux mettre ta DATABASE_URL directement ici :
 
-   Environment
-   →
+   const DATABASE_URL =
+       "postgresql://user:password@host/database";
+
+   MAIS sur Render il est fortement recommandé
+   d'utiliser une variable d'environnement :
+
    DATABASE_URL
 
-   Exemple de structure :
-
-   postgresql://USER:PASSWORD@HOST/DATABASE
-
-   Ne mets pas ton mot de passe directement dans le code.
-
-   Le serveur utilise automatiquement :
-
-   process.env.DATABASE_URL
+   Le code ci-dessous accepte les deux.
 */
 
 const DATABASE_URL =
-    process.env.DATABASE_URL || "postgresql://bmj_db_user:5FSX8YeJNzwinKdFOrIeEC43aQsuzf91@dpg-d9sdlt49v7es73emrq8g-a/bmj_db";
+    process.env.DATABASE_URL ||
+    "postgresql://bmj_db_user:5FSX8YeJNzwinKdFOrIeEC43aQsuzf91@dpg-d9sdlt49v7es73emrq8g-a/bmj_db";
 
 
 /* =========================================================
-   5. CONFIGURATION ADMIN
+   5. ADMIN
 ========================================================= */
+
+/*
+   Pour plus de sécurité, tu peux également mettre ces valeurs
+   dans les variables d'environnement Render.
+
+   ADMIN_EMAIL
+   ADMIN_SECRET
+*/
 
 const ADMIN_EMAIL =
     process.env.ADMIN_EMAIL ||
@@ -104,26 +141,33 @@ const ADMIN_SECRET =
    6. POOL POSTGRESQL
 ========================================================= */
 
-const pool = new Pool({
+const pool =
+    new Pool({
 
-    connectionString: DATABASE_URL,
+        connectionString:
+            DATABASE_URL,
 
-    ssl:
-        process.env.NODE_ENV === "production"
-            ? {
-                rejectUnauthorized: false
-            }
-            : false,
+        ssl:
+            process.env.NODE_ENV === "production"
+                ? {
+                    rejectUnauthorized: false
+                }
+                : false,
 
-    max: 10,
+        max: 20,
 
-    idleTimeoutMillis: 30000,
+        min: 2,
 
-    connectionTimeoutMillis: 10000,
+        idleTimeoutMillis:
+            30000,
 
-    statement_timeout: 30000
+        connectionTimeoutMillis:
+            10000,
 
-});
+        statement_timeout:
+            30000
+
+    });
 
 
 /* =========================================================
@@ -184,8 +228,15 @@ app.use(
 
 
 /* =========================================================
-   9. BODY JSON
+   9. JSON
 ========================================================= */
+
+/*
+   25 MB permet de recevoir une preuve Base64.
+
+   Cependant, il est recommandé de limiter la taille
+   des fichiers côté frontend.
+*/
 
 app.use(
 
@@ -199,7 +250,7 @@ app.use(
 
 
 /* =========================================================
-   10. BODY URL ENCODED
+   10. URL ENCODED
 ========================================================= */
 
 app.use(
@@ -221,10 +272,10 @@ app.use(
 
 
 /* ---------------------------------------------------------
-   LOG
+   LOG SECTION
 --------------------------------------------------------- */
 
-function logSection(message) {
+function logSection(titre) {
 
     console.log("");
 
@@ -232,7 +283,7 @@ function logSection(message) {
         "========================================"
     );
 
-    console.log(message);
+    console.log(titre);
 
     console.log(
         "========================================"
@@ -404,6 +455,10 @@ function pagination(req) {
 
     }
 
+    /*
+       Protection contre les requêtes énormes.
+    */
+
     if (limit > 100) {
 
         limit = 100;
@@ -425,7 +480,7 @@ function pagination(req) {
 
 
 /* ---------------------------------------------------------
-   EXTRAIRE USER ID
+   EXTRAIRE IDENTIFIANT UTILISATEUR
 --------------------------------------------------------- */
 
 function extraireUserId(body) {
@@ -537,7 +592,7 @@ async function testerDatabase() {
 
 
 /* =========================================================
-   13. CRÉATION DES TABLES
+   13. CRÉATION / MIGRATION DES TABLES
 ========================================================= */
 
 async function creerTables() {
@@ -550,7 +605,7 @@ async function creerTables() {
 
 
         /* =====================================================
-           TABLE USERS
+           USERS
         ===================================================== */
 
         await pool.query(`
@@ -584,7 +639,7 @@ async function creerTables() {
 
 
         /* =====================================================
-           TABLE ADMINS
+           ADMINS
         ===================================================== */
 
         await pool.query(`
@@ -611,7 +666,7 @@ async function creerTables() {
 
 
         /* =====================================================
-           TABLE PAIEMENTS
+           PAIEMENTS
         ===================================================== */
 
         await pool.query(`
@@ -776,6 +831,7 @@ async function creerTables() {
 
         `);
 
+
         await pool.query(`
 
             CREATE INDEX IF NOT EXISTS
@@ -784,6 +840,7 @@ async function creerTables() {
             ON paiements(statut);
 
         `);
+
 
         await pool.query(`
 
@@ -794,6 +851,7 @@ async function creerTables() {
 
         `);
 
+
         await pool.query(`
 
             CREATE INDEX IF NOT EXISTS
@@ -802,6 +860,7 @@ async function creerTables() {
             ON paiements(date DESC);
 
         `);
+
 
         await pool.query(`
 
@@ -933,7 +992,7 @@ async function creerTables() {
 
 
 /* =========================================================
-   14. ROUTE PRINCIPALE
+   14. PAGE PRINCIPALE
 ========================================================= */
 
 app.get(
@@ -948,7 +1007,7 @@ app.get(
                 "BMJ SERVICE API fonctionne.",
 
             version:
-                "6.0.0",
+                "5.0.0",
 
             server:
                 "Node.js + Express",
@@ -957,10 +1016,7 @@ app.get(
                 "PostgreSQL",
 
             status:
-                "online",
-
-            timestamp:
-                new Date().toISOString()
+                "online"
 
         });
 
@@ -969,61 +1025,7 @@ app.get(
 
 
 /* =========================================================
-   15. HEALTH CHECK
-========================================================= */
-
-app.get(
-    "/api/health",
-    async (req, res) => {
-
-        try {
-
-            await pool.query(
-                "SELECT 1"
-            );
-
-            res.json({
-
-                success: true,
-
-                server:
-                    "online",
-
-                database:
-                    "connected",
-
-                timestamp:
-                    new Date().toISOString()
-
-            });
-
-        }
-
-        catch (error) {
-
-            res.status(503).json({
-
-                success: false,
-
-                server:
-                    "online",
-
-                database:
-                    "offline",
-
-                error:
-                    error.message
-
-            });
-
-        }
-
-    }
-);
-
-
-/* =========================================================
-   16. TEST DATABASE
+   15. TEST DATABASE
 ========================================================= */
 
 app.get(
@@ -1077,7 +1079,7 @@ app.get(
 
 
 /* =========================================================
-   17. INSCRIPTION
+   16. INSCRIPTION
 ========================================================= */
 
 app.post(
@@ -1209,7 +1211,7 @@ app.post(
                         telephone
                             ? String(
                                 telephone
-                            ).trim()
+                              ).trim()
                             : null,
 
                         String(password),
@@ -1217,7 +1219,7 @@ app.post(
                         domaine
                             ? String(
                                 domaine
-                            ).trim()
+                              ).trim()
                             : null,
 
                         photo || null
@@ -1279,7 +1281,7 @@ app.post(
 
 
 /* =========================================================
-   18. CONNEXION UTILISATEUR
+   17. CONNEXION UTILISATEUR
 ========================================================= */
 
 app.post(
@@ -1433,7 +1435,7 @@ app.post(
 
 
 /* =========================================================
-   19. CONNEXION ADMIN
+   18. CONNEXION ADMIN
 ========================================================= */
 
 app.post(
@@ -1592,7 +1594,7 @@ app.post(
 
 
 /* =========================================================
-   20. VÉRIFIER ADMIN
+   19. VÉRIFIER ADMIN
 ========================================================= */
 
 app.get(
@@ -1681,7 +1683,7 @@ app.get(
         catch (error) {
 
             console.error(
-                "❌ ERREUR ADMIN :",
+                "❌ ERREUR VÉRIFICATION ADMIN :",
                 error.message
             );
 
@@ -1704,7 +1706,7 @@ app.get(
 
 
 /* =========================================================
-   21. TOUS LES APPRENANTS
+   20. TOUS LES APPRENANTS
 ========================================================= */
 
 app.get(
@@ -1776,7 +1778,7 @@ app.get(
 
 
 /* =========================================================
-   22. UN APPRENANT
+   21. UN APPRENANT
 ========================================================= */
 
 app.get(
@@ -1786,9 +1788,7 @@ app.get(
         try {
 
             const id =
-                Number(
-                    req.params.id
-                );
+                Number(req.params.id);
 
 
             if (
@@ -1893,7 +1893,7 @@ app.get(
 
 
 /* =========================================================
-   23. ACTIVER / DÉSACTIVER PREMIUM
+   22. ACTIVER / DÉSACTIVER PREMIUM
 ========================================================= */
 
 app.put(
@@ -1903,9 +1903,7 @@ app.put(
         try {
 
             const id =
-                Number(
-                    req.params.id
-                );
+                Number(req.params.id);
 
 
             if (
@@ -2082,8 +2080,25 @@ app.put(
 
 
 /* =========================================================
-   24. LISTE DES PAIEMENTS
+   23. LISTE DES PAIEMENTS
 ========================================================= */
+
+/*
+   IMPORTANT :
+
+   On NE renvoie PAS la colonne capture dans la liste.
+
+   Pourquoi ?
+
+   Une preuve peut être une image Base64 de plusieurs MB.
+
+   Si tu demandes 500 paiements, tu pourrais essayer de
+   transférer plusieurs centaines de MB.
+
+   La preuve est disponible avec :
+
+   GET /api/paiements/:id
+*/
 
 app.get(
     "/api/paiements",
@@ -2114,7 +2129,9 @@ app.get(
 
             if (statut) {
 
-                params.push(statut);
+                params.push(
+                    statut
+                );
 
                 where =
                     `WHERE LOWER(statut) = $1`;
@@ -2127,8 +2144,7 @@ app.get(
 
                     `
 
-                    SELECT
-                        COUNT(*)::int AS total
+                    SELECT COUNT(*)::int AS total
 
                     FROM paiements
 
@@ -2146,7 +2162,6 @@ app.get(
 
 
             params.push(limit);
-
             params.push(offset);
 
 
@@ -2244,7 +2259,7 @@ app.get(
 
 
 /* =========================================================
-   25. RECHERCHE PAIEMENTS
+   24. RECHERCHE RAPIDE PAIEMENTS
 ========================================================= */
 
 app.get(
@@ -2309,22 +2324,17 @@ app.get(
                     FROM paiements
 
                     WHERE
+                        LOWER(COALESCE(nom, ''))
+                            LIKE $1
 
-                        LOWER(
-                            COALESCE(nom, '')
-                        ) LIKE $1
+                        OR LOWER(COALESCE(email, ''))
+                            LIKE $1
 
-                        OR LOWER(
-                            COALESCE(email, '')
-                        ) LIKE $1
+                        OR LOWER(COALESCE(id_paiement, ''))
+                            LIKE $1
 
-                        OR LOWER(
-                            COALESCE(id_paiement, '')
-                        ) LIKE $1
-
-                        OR LOWER(
-                            COALESCE(reference_transaction, '')
-                        ) LIKE $1
+                        OR LOWER(COALESCE(reference_transaction, ''))
+                            LIKE $1
 
                     ORDER BY id DESC
 
@@ -2379,7 +2389,7 @@ app.get(
 
 
 /* =========================================================
-   26. UN PAIEMENT
+   25. UN PAIEMENT
 ========================================================= */
 
 app.get(
@@ -2389,9 +2399,7 @@ app.get(
         try {
 
             const id =
-                Number(
-                    req.params.id
-                );
+                Number(req.params.id);
 
 
             if (
@@ -2488,7 +2496,7 @@ app.get(
 
 
 /* =========================================================
-   27. CRÉER PAIEMENT DEPUIS LE SITE
+   26. CRÉER PAIEMENT DEPUIS LE SITE
 ========================================================= */
 
 app.post(
@@ -2670,7 +2678,7 @@ app.post(
 
 
             /* =================================================
-               VÉRIFIER DOUBLON
+               VÉRIFICATION ID PAIEMENT
             ================================================= */
 
             const paiementExiste =
@@ -2718,7 +2726,7 @@ app.post(
 
 
             /* =================================================
-               PAIEMENT EN ATTENTE EXISTANT
+               PAIEMENT EN ATTENTE
             ================================================= */
 
             const paiementAttente =
@@ -2738,10 +2746,7 @@ app.post(
                         LOWER(email) = $1
 
                         AND LOWER(
-                            COALESCE(
-                                statut,
-                                ''
-                            )
+                            COALESCE(statut, '')
                         ) = 'en_attente'
 
                     ORDER BY id DESC
@@ -2820,7 +2825,7 @@ app.post(
 
 
             /* =================================================
-               INFORMATIONS PAIEMENT
+               AUTRES INFORMATIONS
             ================================================= */
 
             const devise =
@@ -3009,8 +3014,34 @@ app.post(
 
 
 /* =========================================================
-   28. AJOUT PAIEMENT REÇU PAR EMAIL
+   27. AJOUTER PAIEMENT REÇU PAR EMAIL
 ========================================================= */
+
+/*
+   ==========================================================
+   NOUVELLE FONCTIONNALITÉ IMPORTANTE
+   ==========================================================
+
+   L'administrateur reçoit par exemple :
+
+   "Bonjour BMJ SERVICE,
+    j'ai effectué le paiement.
+    Voici ma preuve."
+
+   Il télécharge la preuve depuis son email.
+
+   Ensuite il utilise le tableau de bord :
+
+   AJOUTER PAIEMENT REÇU PAR EMAIL
+
+   Ce endpoint crée le paiement directement dans PostgreSQL.
+
+   source = "email"
+
+   statut = "en_attente"
+
+   L'admin peut ensuite cliquer sur VALIDIFIER.
+*/
 
 app.post(
     "/api/admin/paiements",
@@ -3026,7 +3057,6 @@ app.post(
 
                 nom,
                 email,
-
                 utilisateur_id,
                 utilisateurID,
                 userId,
@@ -3098,7 +3128,16 @@ app.post(
 
                             `
 
-                            SELECT *
+                            SELECT
+                                id,
+                                nom,
+                                email,
+                                telephone,
+                                domaine,
+                                premium,
+                                is_premium,
+                                photo,
+                                date_creation
 
                             FROM users
 
@@ -3136,7 +3175,16 @@ app.post(
 
                         `
 
-                        SELECT *
+                        SELECT
+                            id,
+                            nom,
+                            email,
+                            telephone,
+                            domaine,
+                            premium,
+                            is_premium,
+                            photo,
+                            date_creation
 
                         FROM users
 
@@ -3223,6 +3271,10 @@ app.post(
 
             }
 
+
+            /* =================================================
+               INFORMATIONS
+            ================================================= */
 
             const deviseFinal =
                 String(
@@ -3431,7 +3483,7 @@ app.post(
 
 
 /* =========================================================
-   29. AJOUT / MODIFICATION PREUVE
+   28. AJOUT / MODIFICATION PREUVE
 ========================================================= */
 
 app.put(
@@ -3526,6 +3578,12 @@ app.put(
             }
 
 
+            console.log(
+                "📎 PREUVE AJOUTÉE AU PAIEMENT :",
+                result.rows[0].id_paiement
+            );
+
+
             res.json({
 
                 success: true,
@@ -3546,7 +3604,7 @@ app.put(
         catch (error) {
 
             console.error(
-                "❌ ERREUR PREUVE :",
+                "❌ ERREUR AJOUT PREUVE :",
                 error.message
             );
 
@@ -3569,8 +3627,7 @@ app.put(
 
 
 /* =========================================================
-   30. VALIDER PAIEMENT
-   + ACTIVATION PREMIUM AUTOMATIQUE
+   29. VALIDER PAIEMENT
 ========================================================= */
 
 app.put(
@@ -3613,7 +3670,7 @@ app.put(
 
 
             /* =================================================
-               VERROUILLER PAIEMENT
+               VERROUILLER LE PAIEMENT
             ================================================= */
 
             const paiementResult =
@@ -3671,14 +3728,20 @@ app.put(
 
 
             /* =================================================
-               SI DÉJÀ VALIDÉ
+               DÉJÀ VALIDÉ
             ================================================= */
 
             if (
                 statut === "valide" ||
+                statut === "valide" ||
                 statut === "approuve" ||
                 statut === "active"
             ) {
+
+                /*
+                   Même si le paiement est déjà validé,
+                   on s'assure que le compte reste Premium.
+                */
 
                 await client.query(
 
@@ -3700,7 +3763,8 @@ app.put(
                     [
 
                         String(
-                            paiement.utilisateur_id || ""
+                            paiement.utilisateur_id ||
+                            ""
                         ),
 
                         normaliserEmail(
@@ -4027,7 +4091,7 @@ app.put(
 
 
 /* =========================================================
-   31. REFUSER PAIEMENT
+   30. REFUSER PAIEMENT
 ========================================================= */
 
 app.put(
@@ -4095,6 +4159,7 @@ app.put(
                     [
 
                         commentaire,
+
                         id
 
                     ]
@@ -4144,7 +4209,7 @@ app.put(
         catch (error) {
 
             console.error(
-                "❌ ERREUR REFUS :",
+                "❌ ERREUR REFUS PAIEMENT :",
                 error.message
             );
 
@@ -4167,137 +4232,7 @@ app.put(
 
 
 /* =========================================================
-   32. STATISTIQUES ADMIN
-========================================================= */
-
-app.get(
-    "/api/admin/statistiques",
-    async (req, res) => {
-
-        try {
-
-            const users =
-                await pool.query(`
-
-                    SELECT
-                        COUNT(*)::int AS total,
-
-                        COUNT(*) FILTER (
-                            WHERE premium = TRUE
-                        )::int AS premium
-
-                    FROM users
-
-                `);
-
-
-            const paiements =
-                await pool.query(`
-
-                    SELECT
-
-                        COUNT(*)::int AS total,
-
-                        COUNT(*) FILTER (
-                            WHERE statut = 'en_attente'
-                        )::int AS en_attente,
-
-                        COUNT(*) FILTER (
-                            WHERE statut = 'valide'
-                        )::int AS valides,
-
-                        COUNT(*) FILTER (
-                            WHERE statut = 'refuse'
-                        )::int AS refuses
-
-                    FROM paiements
-
-                `);
-
-
-            const revenus =
-                await pool.query(`
-
-                    SELECT
-
-                        COALESCE(
-                            SUM(montant)
-                            FILTER (
-                                WHERE statut = 'valide'
-                            ),
-                            0
-                        ) AS total
-
-                    FROM paiements
-
-                `);
-
-
-            res.json({
-
-                success: true,
-
-                utilisateurs: {
-
-                    total:
-                        users.rows[0].total,
-
-                    premium:
-                        users.rows[0].premium
-
-                },
-
-                paiements: {
-
-                    total:
-                        paiements.rows[0].total,
-
-                    en_attente:
-                        paiements.rows[0].en_attente,
-
-                    valides:
-                        paiements.rows[0].valides,
-
-                    refuses:
-                        paiements.rows[0].refuses
-
-                },
-
-                revenus:
-
-                    revenus.rows[0].total
-
-            });
-
-        }
-
-        catch (error) {
-
-            console.error(
-                "❌ ERREUR STATISTIQUES :",
-                error.message
-            );
-
-            res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Impossible de récupérer les statistiques.",
-
-                error:
-                    error.message
-
-            });
-
-        }
-
-    }
-);
-
-
-/* =========================================================
-   33. DEBUG ROUTES
+   31. DEBUG ROUTES
 ========================================================= */
 
 app.get(
@@ -4309,13 +4244,11 @@ app.get(
             success: true,
 
             version:
-                "6.0.0",
+                "5.0.0",
 
             routes: [
 
                 "GET /",
-
-                "GET /api/health",
 
                 "GET /api/test-db",
 
@@ -4326,8 +4259,6 @@ app.get(
                 "POST /api/admin/connexion",
 
                 "GET /api/admin/verifier",
-
-                "GET /api/admin/statistiques",
 
                 "GET /api/apprenants",
 
@@ -4362,7 +4293,7 @@ app.get(
 
 
 /* =========================================================
-   34. ROUTE INEXISTANTE
+   32. ROUTE INEXISTANTE
 ========================================================= */
 
 app.use(
@@ -4388,7 +4319,7 @@ app.use(
 
 
 /* =========================================================
-   35. GESTIONNAIRE D'ERREURS
+   33. GESTIONNAIRE D'ERREURS
 ========================================================= */
 
 app.use(
@@ -4411,6 +4342,10 @@ app.use(
         );
 
 
+        /* =====================================================
+           JSON INVALIDE
+        ===================================================== */
+
         if (
             error instanceof SyntaxError &&
             error.status === 400 &&
@@ -4429,6 +4364,10 @@ app.use(
 
         }
 
+
+        /* =====================================================
+           PAYLOAD TROP GRAND
+        ===================================================== */
 
         if (
             error.type ===
@@ -4464,7 +4403,7 @@ app.use(
 
 
 /* =========================================================
-   36. DÉMARRAGE
+   34. DÉMARRAGE SERVEUR
 ========================================================= */
 
 async function demarrerServeur() {
@@ -4472,7 +4411,7 @@ async function demarrerServeur() {
     try {
 
         logSection(
-            "🚀 DÉMARRAGE BMJ SERVICE API 6.0"
+            "🚀 DÉMARRAGE BMJ SERVICE API 5.0"
         );
 
 
@@ -4495,17 +4434,17 @@ async function demarrerServeur() {
 
 
         /* =====================================================
-           VÉRIFICATION DATABASE_URL
+           VÉRIFIER DATABASE_URL
         ===================================================== */
 
-        if (!DATABASE_URL) {
+        if (
+            !DATABASE_URL ||
+            DATABASE_URL ===
+                "LAISSE_VIDE_ET_MET_TA_DATABASE_URL_ICI"
+        ) {
 
             console.error(
-                "❌ DATABASE_URL N'EST PAS CONFIGURÉE."
-            );
-
-            console.error(
-                "👉 Ajoute DATABASE_URL dans Render > Environment."
+                "⚠️ DATABASE_URL n'est pas configurée."
             );
 
         }
@@ -4527,6 +4466,7 @@ async function demarrerServeur() {
 
             console.error(
                 "⚠️ Vérifie DATABASE_URL sur Render."
+
             );
 
         }
@@ -4539,7 +4479,7 @@ async function demarrerServeur() {
 
 
         /* =====================================================
-           DÉMARRAGE EXPRESS
+           EXPRESS
         ===================================================== */
 
         app.listen(
@@ -4564,17 +4504,7 @@ async function demarrerServeur() {
 
 
                 console.log(
-                    "👤 UTILISATEURS : ACTIF"
-                );
-
-
-                console.log(
-                    "🔐 ADMIN : ACTIF"
-                );
-
-
-                console.log(
-                    "💳 PAIEMENTS : ACTIF"
+                    "💳 SYSTÈME PAIEMENTS : ACTIF"
                 );
 
 
@@ -4584,17 +4514,12 @@ async function demarrerServeur() {
 
 
                 console.log(
-                    "📎 PREUVES : ACTIF"
+                    "📎 GESTION PREUVES : ACTIF"
                 );
 
 
                 console.log(
                     "⭐ PREMIUM AUTOMATIQUE : ACTIF"
-                );
-
-
-                console.log(
-                    "📊 STATISTIQUES : ACTIF"
                 );
 
 
@@ -4626,7 +4551,7 @@ async function demarrerServeur() {
 
 
 /* =========================================================
-   37. ARRÊT PROPRE
+   35. ARRÊT PROPRE
 ========================================================= */
 
 async function arreterServeur(signal) {
@@ -4668,7 +4593,7 @@ async function arreterServeur(signal) {
 
 
 /* =========================================================
-   38. SIGINT
+   36. SIGINT
 ========================================================= */
 
 process.on(
@@ -4684,7 +4609,7 @@ process.on(
 
 
 /* =========================================================
-   39. SIGTERM
+   37. SIGTERM
 ========================================================= */
 
 process.on(
@@ -4700,7 +4625,7 @@ process.on(
 
 
 /* =========================================================
-   40. UNHANDLED REJECTION
+   38. UNHANDLED REJECTION
 ========================================================= */
 
 process.on(
@@ -4717,7 +4642,7 @@ process.on(
 
 
 /* =========================================================
-   41. UNCAUGHT EXCEPTION
+   39. UNCAUGHT EXCEPTION
 ========================================================= */
 
 process.on(
@@ -4734,7 +4659,7 @@ process.on(
 
 
 /* =========================================================
-   42. START
+   40. START
 ========================================================= */
 
 demarrerServeur();
