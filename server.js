@@ -3158,13 +3158,9 @@ async function getPaymentById(req, res) {
         if (!id) {
 
             return error(
-
                 res,
-
                 "ID paiement invalide.",
-
                 400
-
             );
 
         }
@@ -3185,14 +3181,25 @@ async function getPaymentById(req, res) {
                         AS user_email_db,
 
                     u.telephone
-                        AS user_telephone_db
+                        AS user_telephone_db,
+
+                    u.premium
+                        AS user_premium,
+
+                    u.is_premium
+                        AS user_is_premium,
+
+                    u.premium_until
+                        AS user_premium_until
 
                 FROM paiements p
 
                 LEFT JOIN users u
-                    ON u.id=p.user_id
+                    ON u.id = p.user_id
 
-                WHERE p.id=$1
+                WHERE p.id = $1
+
+                LIMIT 1
                 `,
 
                 [id]
@@ -3203,13 +3210,9 @@ async function getPaymentById(req, res) {
         if (!result.rows.length) {
 
             return error(
-
                 res,
-
                 "Paiement introuvable.",
-
                 404
-
             );
 
         }
@@ -3226,6 +3229,12 @@ async function getPaymentById(req, res) {
         );
 
     } catch (err) {
+
+        console.error(
+            "GET PAYMENT BY ID ERROR:",
+            err
+        );
+
 
         return error(
 
@@ -3253,8 +3262,17 @@ app.get(
 );
 
 
+
 /* ============================================================
-   33. CRÉER PAIEMENT
+   33. CRÉER UNE DEMANDE DE PAIEMENT
+   ------------------------------------------------------------
+   IMPORTANT :
+   - Cette route est utilisée par le frontend utilisateur.
+   - La demande est créée avec status = pending.
+   - Elle ne valide PAS automatiquement le Premium.
+   - Elle accepte plusieurs noms de champs.
+   - Elle peut retrouver l'utilisateur par ID, email
+     ou téléphone.
 ============================================================ */
 
 async function createPayment(req, res) {
@@ -3265,23 +3283,280 @@ async function createPayment(req, res) {
             req.body || {};
 
 
-        const userId =
-            body.user_id ||
-            body.userId ||
+        console.log(
+            "=================================================="
+        );
+
+        console.log(
+            "NOUVELLE DEMANDE DE PAIEMENT"
+        );
+
+        console.log(
+            "BODY RECU :",
+            JSON.stringify(
+                {
+                    ...body,
+                    preuve:
+                        body.preuve
+                            ? "[PREUVE RECUE]"
+                            : undefined,
+                    proof:
+                        body.proof
+                            ? "[PROOF RECUE]"
+                            : undefined
+                }
+            )
+        );
+
+        console.log(
+            "=================================================="
+        );
+
+
+        /* =====================================================
+           1. RECUPERATION DES DONNEES UTILISATEUR
+        ===================================================== */
+
+        let userId =
+            body.user_id ??
+            body.userId ??
+            body.userid ??
+            body.id_user ??
+            body.idUser ??
             null;
 
 
-        const amount =
-            Number(
-                body.amount ??
-                body.montant ??
-                0
+        let user = null;
+
+
+        /*
+         * Si userId est une chaîne vide,
+         * on le transforme en null.
+         */
+
+        if (
+            userId === "" ||
+            userId === undefined
+        ) {
+
+            userId = null;
+
+        }
+
+
+        /*
+         * Si userId est numérique sous forme de texte,
+         * conversion en nombre.
+         */
+
+        if (
+            userId !== null &&
+            String(userId).trim() !== ""
+        ) {
+
+            const parsedUserId =
+                Number(userId);
+
+
+            if (
+                Number.isInteger(
+                    parsedUserId
+                ) &&
+                parsedUserId > 0
+            ) {
+
+                userId =
+                    parsedUserId;
+
+            }
+
+        }
+
+
+        /* =====================================================
+           2. RECHERCHE DE L'UTILISATEUR PAR ID
+        ===================================================== */
+
+        if (userId) {
+
+            const userResult =
+                await pool.query(
+
+                    `
+                    SELECT *
+
+                    FROM users
+
+                    WHERE id = $1
+
+                    LIMIT 1
+                    `,
+
+                    [userId]
+
+                );
+
+
+            if (
+                userResult.rows.length
+            ) {
+
+                user =
+                    userResult.rows[0];
+
+            }
+
+        }
+
+
+        /* =====================================================
+           3. SI PAS D'UTILISATEUR PAR ID,
+              RECHERCHE PAR EMAIL
+        ===================================================== */
+
+        const emailFromBody =
+            String(
+                body.email ??
+                body.user_email ??
+                body.userEmail ??
+                ""
+            ).trim();
+
+
+        if (
+            !user &&
+            emailFromBody
+        ) {
+
+            const userResult =
+                await pool.query(
+
+                    `
+                    SELECT *
+
+                    FROM users
+
+                    WHERE LOWER(email) =
+                          LOWER($1)
+
+                    LIMIT 1
+                    `,
+
+                    [emailFromBody]
+
+                );
+
+
+            if (
+                userResult.rows.length
+            ) {
+
+                user =
+                    userResult.rows[0];
+
+                userId =
+                    user.id;
+
+            }
+
+        }
+
+
+        /* =====================================================
+           4. SI PAS D'UTILISATEUR PAR EMAIL,
+              RECHERCHE PAR TELEPHONE
+        ===================================================== */
+
+        const telephoneFromBody =
+            String(
+                body.telephone ??
+                body.phone ??
+                body.tel ??
+                ""
+            ).trim();
+
+
+        if (
+            !user &&
+            telephoneFromBody
+        ) {
+
+            const userResult =
+                await pool.query(
+
+                    `
+                    SELECT *
+
+                    FROM users
+
+                    WHERE telephone = $1
+
+                    LIMIT 1
+                    `,
+
+                    [telephoneFromBody]
+
+                );
+
+
+            if (
+                userResult.rows.length
+            ) {
+
+                user =
+                    userResult.rows[0];
+
+                userId =
+                    user.id;
+
+            }
+
+        }
+
+
+        /* =====================================================
+           5. VERIFICATION UTILISATEUR
+        ===================================================== */
+
+        /*
+         * Une demande de paiement doit être liée
+         * à un utilisateur existant.
+         */
+
+        if (!user) {
+
+            return error(
+
+                res,
+
+                "Utilisateur introuvable. Connectez-vous avant d'envoyer une demande de paiement.",
+
+                404
+
             );
+
+        }
+
+
+        /* =====================================================
+           6. MONTANT
+        ===================================================== */
+
+        const rawAmount =
+            body.amount ??
+            body.montant ??
+            body.price ??
+            body.prix ??
+            0;
+
+
+        const amount =
+            Number(rawAmount);
 
 
         if (
             !Number.isFinite(amount) ||
-            amount < 0
+            amount <= 0
         ) {
 
             return error(
@@ -3297,98 +3572,139 @@ async function createPayment(req, res) {
         }
 
 
-        const currency =
-            body.currency ||
-            "USD";
+        /* =====================================================
+           7. DEVISE
+        ===================================================== */
 
+        const currency =
+            String(
+                body.currency ??
+                body.devise ??
+                "USD"
+            )
+            .trim()
+            .toUpperCase();
+
+
+        /* =====================================================
+           8. METHODE DE PAIEMENT
+        ===================================================== */
 
         const method =
-            body.method ||
-            body.methode ||
-            body.mode_paiement ||
-            null;
+            String(
+                body.method ??
+                body.methode ??
+                body.mode_paiement ??
+                body.modePaiement ??
+                body.payment_method ??
+                body.paymentMethod ??
+                ""
+            )
+            .trim();
 
 
-        const reference =
-            body.reference ||
-            body.transaction_id ||
-            body.transactionId ||
-            null;
+        if (!method) {
 
+            return error(
 
-        const proof =
-            body.preuve ||
-            body.proof ||
-            body.image ||
-            null;
+                res,
 
+                "Méthode de paiement obligatoire.",
 
-        let user =
-            null;
+                400
 
-
-        if (userId) {
-
-            const userResult =
-                await pool.query(
-
-                    `
-                    SELECT *
-
-                    FROM users
-
-                    WHERE id=$1
-                    `,
-
-                    [userId]
-
-                );
-
-
-            if (!userResult.rows.length) {
-
-                return error(
-
-                    res,
-
-                    "Utilisateur associé introuvable.",
-
-                    404
-
-                );
-
-            }
-
-
-            user =
-                userResult.rows[0];
+            );
 
         }
 
 
+        /* =====================================================
+           9. REFERENCE / TRANSACTION
+        ===================================================== */
+
+        const referenceValue =
+            body.reference ??
+            body.transaction_id ??
+            body.transactionId ??
+            body.transaction ??
+            body.reference_paiement ??
+            null;
+
+
+        const reference =
+            referenceValue !== null &&
+            referenceValue !== undefined
+                ? String(
+                    referenceValue
+                ).trim()
+                : null;
+
+
+        /* =====================================================
+           10. PREUVE DE PAIEMENT
+        ===================================================== */
+
+        const proofValue =
+            body.preuve ??
+            body.proof ??
+            body.image ??
+            body.image_proof ??
+            body.payment_proof ??
+            body.paymentProof ??
+            body.capture ??
+            null;
+
+
+        const proof =
+            proofValue !== null &&
+            proofValue !== undefined
+                ? String(
+                    proofValue
+                )
+                : null;
+
+
+        /* =====================================================
+           11. NOM / EMAIL / TELEPHONE
+        ===================================================== */
+
         const nom =
-            body.nom ||
-            (user && user.nom) ||
+            body.nom ??
+            body.name ??
+            user.nom ??
             null;
 
 
         const email =
-            body.email ||
-            (user && user.email) ||
+            body.email ??
+            body.user_email ??
+            body.userEmail ??
+            user.email ??
             null;
 
 
         const telephone =
-            body.telephone ||
-            (user && user.telephone) ||
+            body.telephone ??
+            body.phone ??
+            body.tel ??
+            user.telephone ??
             null;
+
+
+        /* =====================================================
+           12. PREMIUM DAYS
+        ===================================================== */
+
+        const premiumDaysRaw =
+            body.premium_days ??
+            body.premiumDays ??
+            body.days ??
+            30;
 
 
         const premiumDays =
             Number(
-                body.premium_days ??
-                body.premiumDays ??
-                30
+                premiumDaysRaw
             );
 
 
@@ -3412,6 +3728,21 @@ async function createPayment(req, res) {
         }
 
 
+        /* =====================================================
+           13. NOTES
+        ===================================================== */
+
+        const notes =
+            body.notes ??
+            body.note ??
+            body.message ??
+            null;
+
+
+        /* =====================================================
+           14. CREATION DE LA DEMANDE
+        ===================================================== */
+
         const result =
             await pool.query(
 
@@ -3420,20 +3751,35 @@ async function createPayment(req, res) {
 
                 (
                     user_id,
+
                     nom,
+
                     email,
+
                     telephone,
+
                     amount,
+
                     montant,
+
                     currency,
+
                     methode,
+
                     method,
+
                     reference,
+
                     transaction_id,
+
                     preuve,
+
                     proof,
+
                     status,
+
                     premium_days,
+
                     notes
                 )
 
@@ -3441,20 +3787,35 @@ async function createPayment(req, res) {
 
                 (
                     $1,
+
                     $2,
+
                     $3,
+
                     $4,
+
                     $5,
+
                     $5,
+
                     $6,
+
                     $7,
+
                     $7,
+
                     $8,
+
                     $8,
+
                     $9,
+
                     $9,
+
                     'pending',
+
                     $10,
+
                     $11
                 )
 
@@ -3483,48 +3844,152 @@ async function createPayment(req, res) {
 
                     premiumDays,
 
-                    body.notes ||
-                    null
+                    notes
 
                 ]
 
             );
 
 
+        /* =====================================================
+           15. VERIFICATION INSERTION
+        ===================================================== */
+
+        if (
+            !result.rows.length
+        ) {
+
+            return error(
+
+                res,
+
+                "La demande de paiement n'a pas été créée.",
+
+                500
+
+            );
+
+        }
+
+
         const payment =
             result.rows[0];
 
 
-        await logActivity(
-
-            "CREATE_PAYMENT",
-
-            `Paiement ${payment.id} créé pour ${email || "utilisateur"}`,
-
-            userId,
-
+        console.log(
+            "PAIEMENT CREE :",
             payment.id
-
         );
 
+
+        console.log(
+            "UTILISATEUR :",
+            payment.user_id
+        );
+
+
+        console.log(
+            "STATUT :",
+            payment.status
+        );
+
+
+        /* =====================================================
+           16. JOURNAL ADMIN
+        ===================================================== */
+
+        try {
+
+            await logActivity(
+
+                "CREATE_PAYMENT",
+
+                `Demande de paiement ${payment.id} créée pour ${email || "utilisateur"}`,
+
+                userId,
+
+                payment.id
+
+            );
+
+        } catch (logError) {
+
+            /*
+             * Le journal ne doit jamais empêcher
+             * l'enregistrement du paiement.
+             */
+
+            console.error(
+
+                "Erreur journal paiement :",
+
+                logError
+
+            );
+
+        }
+
+
+        /* =====================================================
+           17. REPONSE FRONTEND
+        ===================================================== */
 
         return success(
 
             res,
 
-            payment,
+            {
 
-            "Paiement enregistré avec succès"
+                ...payment,
+
+                payment_id:
+                    payment.id,
+
+                user_id:
+                    payment.user_id,
+
+                status:
+                    payment.status,
+
+                message:
+                    "Demande de paiement envoyée avec succès."
+
+            },
+
+            "Demande de paiement envoyée avec succès."
 
         );
 
+
     } catch (err) {
+
+        console.error(
+            "=================================================="
+        );
+
+        console.error(
+            "ERREUR CREATION PAIEMENT"
+        );
+
+        console.error(
+            err
+        );
+
+        console.error(
+            "MESSAGE :",
+            err.message
+        );
+
+        console.error(
+            "=================================================="
+        );
+
 
         return error(
 
             res,
 
-            "Impossible d'enregistrer le paiement.",
+            "Impossible d'envoyer la demande de paiement.",
 
             500,
 
@@ -3537,6 +4002,10 @@ async function createPayment(req, res) {
 }
 
 
+/* ============================================================
+   ROUTE PRINCIPALE — UTILISATEUR
+============================================================ */
+
 app.post(
 
     "/api/paiements",
@@ -3546,6 +4015,31 @@ app.post(
 );
 
 
+/* ============================================================
+   ROUTE ALTERNATIVE — ADMIN
+   Ne pas supprimer.
+============================================================ */
+
+app.post(
+
+    "/api/paiements/manual",
+
+    adminAuth,
+
+    createPayment
+
+);
+
+
+app.post(
+
+    "/api/admin/paiements/manual",
+
+    adminAuth,
+
+    createPayment
+
+);
 /* ============================================================
    34. PAIEMENT MANUEL ADMIN
 ============================================================ */
