@@ -2970,6 +2970,30 @@ app.delete(
 
 );
 
+/* ============================================================
+   BMJ SERVICE
+   SYSTÈME DE PAIEMENTS
+   VERSION STABLE
+   ------------------------------------------------------------
+   FLUX :
+
+   UTILISATEUR
+       ↓
+   POST /api/paiements
+       ↓
+   PostgreSQL
+       ↓
+   status = pending
+       ↓
+   ADMIN
+       ↓
+   GET /api/admin/paiements
+       ↓
+   VALIDATION / REFUS
+       ↓
+   PREMIUM
+============================================================ */
+
 
 /* ============================================================
    31. LISTE DES PAIEMENTS
@@ -2979,132 +3003,106 @@ async function getPayments(req, res) {
 
     try {
 
-        const result =
-            await pool.query(
+        const result = await pool.query(`
+            SELECT
+                p.*,
 
-                `
-                SELECT
+                u.nom AS user_nom_db,
+                u.email AS user_email_db,
+                u.telephone AS user_telephone_db
 
-                    p.*,
+            FROM paiements p
 
-                    u.nom
-                        AS user_nom_db,
+            LEFT JOIN users u
+                ON u.id = p.user_id
 
-                    u.email
-                        AS user_email_db,
-
-                    u.telephone
-                        AS user_telephone_db
-
-                FROM paiements p
-
-                LEFT JOIN users u
-                    ON u.id=p.user_id
-
-                ORDER BY
-                    p.created_at DESC
-                `
-
-            );
+            ORDER BY p.created_at DESC
+        `);
 
 
-        const data =
-            result.rows.map(
+        const payments = result.rows.map(payment => ({
 
-                function(payment) {
+            id: payment.id,
 
-                    return {
+            user_id: payment.user_id,
 
-                        ...payment,
+            nom:
+                payment.nom ||
+                payment.user_nom_db ||
+                null,
 
-                        nom:
-                            payment.nom ||
-                            payment.user_nom_db ||
-                            null,
+            email:
+                payment.email ||
+                payment.user_email_db ||
+                null,
 
-                        email:
-                            payment.email ||
-                            payment.user_email_db ||
-                            null,
+            telephone:
+                payment.telephone ||
+                payment.user_telephone_db ||
+                null,
 
-                        telephone:
-                            payment.telephone ||
-                            payment.user_telephone_db ||
-                            null,
+            amount:
+                Number(payment.amount || 0),
 
-                        amount:
-                            payment.amount ??
-                            payment.montant ??
-                            0,
+            currency:
+                payment.currency || "USD",
 
-                        montant:
-                            payment.montant ??
-                            payment.amount ??
-                            0,
+            method:
+                payment.method || null,
 
-                        method:
-                            payment.method ||
-                            payment.methode ||
-                            null,
+            reference:
+                payment.reference || null,
 
-                        methode:
-                            payment.methode ||
-                            payment.method ||
-                            null,
+            proof:
+                payment.proof || null,
 
-                        reference:
-                            payment.reference ||
-                            payment.transaction_id ||
-                            null,
+            status:
+                payment.status || "pending",
 
-                        transaction_id:
-                            payment.transaction_id ||
-                            payment.reference ||
-                            null,
+            premium_days:
+                Number(payment.premium_days || 30),
 
-                        proof:
-                            payment.proof ||
-                            payment.preuve ||
-                            null,
+            notes:
+                payment.notes || null,
 
-                        preuve:
-                            payment.preuve ||
-                            payment.proof ||
-                            null,
+            refusal_reason:
+                payment.refusal_reason || null,
 
-                        status:
-                            payment.status ||
-                            "pending"
+            created_at:
+                payment.created_at,
 
-                    };
+            updated_at:
+                payment.updated_at,
 
-                }
+            validated_at:
+                payment.validated_at,
 
-            );
+            refused_at:
+                payment.refused_at
+
+        }));
 
 
         return success(
-
             res,
-
-            data,
-
+            payments,
             "Paiements chargés"
-
         );
 
-    } catch (err) {
+    }
+
+    catch (err) {
+
+        console.error(
+            "GET PAYMENTS ERROR:",
+            err
+        );
 
         return error(
-
             res,
-
             "Impossible de charger les paiements.",
-
             500,
-
             err.message
-
         );
 
     }
@@ -3113,33 +3111,22 @@ async function getPayments(req, res) {
 
 
 app.get(
-
     "/api/paiements",
-
     getPayments
-
 );
 
 
 app.get(
-
     "/api/admin/paiements",
-
     adminAuth,
-
     getPayments
-
 );
 
 
 app.get(
-
     "/api/admin/payments",
-
     adminAuth,
-
     getPayments
-
 );
 
 
@@ -3151,92 +3138,95 @@ async function getPaymentById(req, res) {
 
     try {
 
-        const id =
-            parseId(req.params.id);
+        const id = parseId(
+            req.params.id
+        );
 
 
         if (!id) {
 
             return error(
-
                 res,
-
                 "ID paiement invalide.",
-
                 400
-
             );
 
         }
 
 
-        const result =
-            await pool.query(
+        const result = await pool.query(`
 
-                `
-                SELECT
+            SELECT
 
-                    p.*,
+                p.*,
 
-                    u.nom
-                        AS user_nom_db,
+                u.nom AS user_nom_db,
+                u.email AS user_email_db,
+                u.telephone AS user_telephone_db
 
-                    u.email
-                        AS user_email_db,
+            FROM paiements p
 
-                    u.telephone
-                        AS user_telephone_db
+            LEFT JOIN users u
+                ON u.id = p.user_id
 
-                FROM paiements p
+            WHERE p.id = $1
 
-                LEFT JOIN users u
-                    ON u.id=p.user_id
-
-                WHERE p.id=$1
-                `,
-
-                [id]
-
-            );
+        `, [id]);
 
 
         if (!result.rows.length) {
 
             return error(
-
                 res,
-
                 "Paiement introuvable.",
-
                 404
-
             );
 
         }
 
 
+        const payment = result.rows[0];
+
+
         return success(
-
             res,
+            {
 
-            result.rows[0],
+                ...payment,
 
+                nom:
+                    payment.nom ||
+                    payment.user_nom_db ||
+                    null,
+
+                email:
+                    payment.email ||
+                    payment.user_email_db ||
+                    null,
+
+                telephone:
+                    payment.telephone ||
+                    payment.user_telephone_db ||
+                    null
+
+            },
             "Paiement trouvé"
-
         );
 
-    } catch (err) {
+    }
+
+    catch (err) {
+
+        console.error(
+            "GET PAYMENT ERROR:",
+            err
+        );
 
         return error(
-
             res,
-
-            "Erreur paiement.",
-
+            "Erreur lors de la récupération du paiement.",
             500,
-
             err.message
-
         );
 
     }
@@ -3245,86 +3235,187 @@ async function getPaymentById(req, res) {
 
 
 app.get(
-
     "/api/paiements/:id",
-
     getPaymentById
-
 );
 
 
 /* ============================================================
-   33. CRÉER PAIEMENT
+   33. CRÉER UNE DEMANDE DE PAIEMENT
+   ------------------------------------------------------------
+   CETTE ROUTE EST UTILISÉE PAR LA NOUVELLE PAGE
+============================================================ */
+
+/* ============================================================
+   33. CRÉER UNE DEMANDE DE PAIEMENT
+   ------------------------------------------------------------
+   La page utilisateur appelle :
+
+   POST /api/paiements
+
+   Le paiement est enregistré directement dans PostgreSQL.
+
+   Aucun email.
 ============================================================ */
 
 async function createPayment(req, res) {
 
     try {
 
-        const body =
-            req.body || {};
+        const body = req.body || {};
+
+        console.log(
+            "========================================"
+        );
+
+        console.log(
+            "NOUVELLE DEMANDE DE PAIEMENT"
+        );
+
+        console.log(
+            "BODY REÇU :",
+            body
+        );
 
 
-        const userId =
-            body.user_id ||
-            body.userId ||
+        /* ====================================================
+           USER ID
+        ==================================================== */
+
+        let userId =
+            body.user_id ??
+            body.userId ??
             null;
 
 
+        if (
+            userId !== null &&
+            userId !== "" &&
+            userId !== undefined
+        ) {
+
+            userId =
+                Number(userId);
+
+            if (
+                !Number.isInteger(userId) ||
+                userId <= 0
+            ) {
+
+                return error(
+                    res,
+                    "ID utilisateur invalide.",
+                    400
+                );
+
+            }
+
+        } else {
+
+            userId = null;
+
+        }
+
+
+        /* ====================================================
+           MONTANT
+        ==================================================== */
+
+        const rawAmount =
+            body.amount ??
+            body.montant;
+
+
         const amount =
-            Number(
-                body.amount ??
-                body.montant ??
-                0
-            );
+            Number(rawAmount);
 
 
         if (
+            rawAmount === undefined ||
+            rawAmount === null ||
+            rawAmount === "" ||
             !Number.isFinite(amount) ||
-            amount < 0
+            amount <= 0
         ) {
 
             return error(
-
                 res,
-
-                "Montant du paiement invalide.",
-
+                "Veuillez saisir un montant valide.",
                 400
-
             );
 
         }
 
 
-        const currency =
-            body.currency ||
-            "USD";
+        /* ====================================================
+           DEVISE
+        ==================================================== */
 
+        const currency =
+            String(
+                body.currency ||
+                "USD"
+            )
+            .trim()
+            .toUpperCase();
+
+
+        /* ====================================================
+           MODE DE PAIEMENT
+        ==================================================== */
 
         const method =
-            body.method ||
-            body.methode ||
-            body.mode_paiement ||
-            null;
+            String(
+                body.method ||
+                body.methode ||
+                body.mode_paiement ||
+                body.modePaiement ||
+                ""
+            )
+            .trim();
 
+
+        if (!method) {
+
+            return error(
+                res,
+                "Le mode de paiement est obligatoire.",
+                400
+            );
+
+        }
+
+
+        /* ====================================================
+           REFERENCE TRANSACTION
+        ==================================================== */
 
         const reference =
-            body.reference ||
-            body.transaction_id ||
-            body.transactionId ||
-            null;
+            String(
+                body.reference ||
+                body.transaction_id ||
+                body.transactionId ||
+                ""
+            )
+            .trim();
 
 
-        const proof =
-            body.preuve ||
-            body.proof ||
-            body.image ||
-            null;
+        if (!reference) {
+
+            return error(
+                res,
+                "La référence de transaction est obligatoire.",
+                400
+            );
+
+        }
 
 
-        let user =
-            null;
+        /* ====================================================
+           INFORMATIONS UTILISATEUR
+        ==================================================== */
+
+        let user = null;
 
 
         if (userId) {
@@ -3333,11 +3424,14 @@ async function createPayment(req, res) {
                 await pool.query(
 
                     `
-                    SELECT *
-
+                    SELECT
+                        id,
+                        nom,
+                        email,
+                        telephone
                     FROM users
-
                     WHERE id=$1
+                    LIMIT 1
                     `,
 
                     [userId]
@@ -3345,16 +3439,14 @@ async function createPayment(req, res) {
                 );
 
 
-            if (!userResult.rows.length) {
+            if (
+                !userResult.rows.length
+            ) {
 
                 return error(
-
                     res,
-
-                    "Utilisateur associé introuvable.",
-
+                    "Utilisateur introuvable.",
                     404
-
                 );
 
             }
@@ -3366,25 +3458,71 @@ async function createPayment(req, res) {
         }
 
 
-        const nom =
-            body.nom ||
-            (user && user.nom) ||
-            null;
+        /* ====================================================
+           NOM
+        ==================================================== */
 
+        const nom =
+            String(
+                body.nom ||
+                (user && user.nom) ||
+                ""
+            )
+            .trim();
+
+
+        /* ====================================================
+           EMAIL
+        ==================================================== */
 
         const email =
-            body.email ||
-            (user && user.email) ||
-            null;
+            String(
+                body.email ||
+                (user && user.email) ||
+                ""
+            )
+            .trim();
 
+
+        /* ====================================================
+           TELEPHONE
+        ==================================================== */
 
         const telephone =
-            body.telephone ||
-            (user && user.telephone) ||
+            String(
+                body.telephone ||
+                (user && user.telephone) ||
+                ""
+            )
+            .trim();
+
+
+        /* ====================================================
+           PREUVE DE PAIEMENT
+
+           Peut recevoir :
+
+           proof
+           preuve
+           image
+           preuve_url
+           proof_url
+        ==================================================== */
+
+        const proof =
+            body.proof ||
+            body.preuve ||
+            body.image ||
+            body.proof_url ||
+            body.preuve_url ||
             null;
 
 
-        const premiumDays =
+        /* ====================================================
+           NOMBRE DE JOURS PREMIUM
+        ==================================================== */
+
+        let premiumDays =
             Number(
                 body.premium_days ??
                 body.premiumDays ??
@@ -3399,63 +3537,91 @@ async function createPayment(req, res) {
             premiumDays <= 0
         ) {
 
-            return error(
-
-                res,
-
-                "Nombre de jours Premium invalide.",
-
-                400
-
-            );
+            premiumDays = 30;
 
         }
 
+
+        /* ====================================================
+           NOTES
+        ==================================================== */
+
+        const notes =
+            body.notes
+                ? String(body.notes).trim()
+                : null;
+
+
+        /* ====================================================
+           INSERTION POSTGRESQL
+        ==================================================== */
 
         const result =
             await pool.query(
 
                 `
                 INSERT INTO paiements
-
                 (
                     user_id,
+
                     nom,
                     email,
                     telephone,
+
                     amount,
                     montant,
+
                     currency,
+
                     methode,
                     method,
+
                     reference,
                     transaction_id,
+
                     preuve,
                     proof,
+
                     status,
+
                     premium_days,
-                    notes
+
+                    notes,
+
+                    created_at,
+                    updated_at
                 )
 
                 VALUES
-
                 (
                     $1,
+
                     $2,
                     $3,
                     $4,
+
                     $5,
                     $5,
+
                     $6,
+
                     $7,
                     $7,
+
                     $8,
                     $8,
+
                     $9,
                     $9,
+
                     'pending',
+
                     $10,
-                    $11
+
+                    $11,
+
+                    CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP
                 )
 
                 RETURNING *
@@ -3465,11 +3631,9 @@ async function createPayment(req, res) {
 
                     userId,
 
-                    nom,
-
-                    email,
-
-                    telephone,
+                    nom || null,
+                    email || null,
+                    telephone || null,
 
                     amount,
 
@@ -3483,42 +3647,108 @@ async function createPayment(req, res) {
 
                     premiumDays,
 
-                    body.notes ||
-                    null
+                    notes
 
                 ]
 
             );
 
 
+        /* ====================================================
+           VERIFICATION
+        ==================================================== */
+
+        if (
+            !result.rows.length
+        ) {
+
+            return error(
+                res,
+                "Le paiement n'a pas été créé.",
+                500
+            );
+
+        }
+
+
         const payment =
             result.rows[0];
 
 
-        await logActivity(
-
-            "CREATE_PAYMENT",
-
-            `Paiement ${payment.id} créé pour ${email || "utilisateur"}`,
-
-            userId,
-
+        console.log(
+            "PAIEMENT ENREGISTRÉ :",
             payment.id
-
         );
 
+
+        /* ====================================================
+           JOURNAL ADMIN
+
+           On protège cette partie afin qu'une erreur
+           de journalisation ne fasse pas échouer
+           l'enregistrement du paiement.
+        ==================================================== */
+
+        try {
+
+            await logActivity(
+
+                "CREATE_PAYMENT",
+
+                `Nouvelle demande de paiement #${payment.id}`,
+
+                userId,
+
+                payment.id
+
+            );
+
+        } catch (logError) {
+
+            console.error(
+                "Erreur journalisation paiement :",
+                logError.message
+            );
+
+        }
+
+
+        /* ====================================================
+           REPONSE
+        ==================================================== */
 
         return success(
 
             res,
 
-            payment,
+            {
 
-            "Paiement enregistré avec succès"
+                id:
+                    payment.id,
+
+                payment:
+                    payment,
+
+                status:
+                    payment.status,
+
+                message:
+                    "Votre demande de paiement a été enregistrée."
+
+            },
+
+            "Demande de paiement enregistrée avec succès"
 
         );
 
+
     } catch (err) {
+
+        console.error(
+            "ERREUR CREATE PAYMENT :",
+            err
+        );
+
 
         return error(
 
@@ -3528,7 +3758,9 @@ async function createPayment(req, res) {
 
             500,
 
-            err.message
+            process.env.NODE_ENV === "production"
+                ? undefined
+                : err.message
 
         );
 
@@ -3537,6 +3769,13 @@ async function createPayment(req, res) {
 }
 
 
+/* ============================================================
+   ROUTE PUBLIQUE
+
+   Nouvelle page de demande :
+   POST /api/paiements
+============================================================ */
+
 app.post(
 
     "/api/paiements",
@@ -3544,36 +3783,26 @@ app.post(
     createPayment
 
 );
-
-
 /* ============================================================
    34. PAIEMENT MANUEL ADMIN
 ============================================================ */
 
 app.post(
-
     "/api/paiements/manual",
-
     adminAuth,
-
     createPayment
-
 );
 
 
 app.post(
-
     "/api/admin/paiements/manual",
-
     adminAuth,
-
     createPayment
-
 );
 
 
 /* ============================================================
-   35. VALIDATION PAIEMENT
+   35. VALIDER UN PAIEMENT
 ============================================================ */
 
 async function validatePayment(req, res) {
@@ -3590,7 +3819,9 @@ async function validatePayment(req, res) {
 
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
@@ -3600,34 +3831,26 @@ async function validatePayment(req, res) {
             );
 
             return error(
-
                 res,
-
                 "ID paiement invalide.",
-
                 400
-
             );
 
         }
 
 
         const paymentResult =
-            await client.query(
+            await client.query(`
 
-                `
                 SELECT *
 
                 FROM paiements
 
-                WHERE id=$1
+                WHERE id = $1
 
                 FOR UPDATE
-                `,
 
-                [id]
-
-            );
+            `, [id]);
 
 
         if (!paymentResult.rows.length) {
@@ -3637,13 +3860,9 @@ async function validatePayment(req, res) {
             );
 
             return error(
-
                 res,
-
                 "Paiement introuvable.",
-
                 404
-
             );
 
         }
@@ -3653,14 +3872,14 @@ async function validatePayment(req, res) {
             paymentResult.rows[0];
 
 
-        const status =
+        const currentStatus =
             String(
-                payment.status || ""
+                payment.status || "pending"
             ).toLowerCase();
 
 
         if (
-            status === "validated"
+            currentStatus === "validated"
         ) {
 
             await client.query(
@@ -3668,20 +3887,16 @@ async function validatePayment(req, res) {
             );
 
             return error(
-
                 res,
-
                 "Ce paiement est déjà validé.",
-
                 409
-
             );
 
         }
 
 
         if (
-            status === "refused"
+            currentStatus === "refused"
         ) {
 
             await client.query(
@@ -3689,13 +3904,9 @@ async function validatePayment(req, res) {
             );
 
             return error(
-
                 res,
-
                 "Ce paiement a déjà été refusé.",
-
                 409
-
             );
 
         }
@@ -3712,34 +3923,26 @@ async function validatePayment(req, res) {
             );
 
             return error(
-
                 res,
-
                 "Ce paiement n'est associé à aucun utilisateur.",
-
                 400
-
             );
 
         }
 
 
         const userResult =
-            await client.query(
+            await client.query(`
 
-                `
                 SELECT *
 
                 FROM users
 
-                WHERE id=$1
+                WHERE id = $1
 
                 FOR UPDATE
-                `,
 
-                [userId]
-
-            );
+            `, [userId]);
 
 
         if (!userResult.rows.length) {
@@ -3749,13 +3952,9 @@ async function validatePayment(req, res) {
             );
 
             return error(
-
                 res,
-
                 "Utilisateur associé introuvable.",
-
                 404
-
             );
 
         }
@@ -3767,8 +3966,7 @@ async function validatePayment(req, res) {
 
         const days =
             Number(
-                payment.premium_days ||
-                30
+                payment.premium_days || 30
             );
 
 
@@ -3780,14 +3978,13 @@ async function validatePayment(req, res) {
             now;
 
 
-        if (
-            user.premium_until
-        ) {
+        if (user.premium_until) {
 
             const currentUntil =
                 new Date(
                     user.premium_until
                 );
+
 
             if (
                 currentUntil > now
@@ -3802,9 +3999,7 @@ async function validatePayment(req, res) {
 
 
         const newPremiumUntil =
-            new Date(
-                baseDate
-            );
+            new Date(baseDate);
 
 
         newPremiumUntil.setDate(
@@ -3815,56 +4010,58 @@ async function validatePayment(req, res) {
         );
 
 
-        await client.query(
+        /* ----------------------------------------------------
+           ACTIVATION PREMIUM
+        ---------------------------------------------------- */
 
-            `
+        await client.query(`
+
             UPDATE users
 
             SET
 
-                premium=true,
+                premium = true,
 
-                is_premium=true,
+                is_premium = true,
 
-                premium_until=$1,
+                premium_until = $1,
 
-                updated_at=CURRENT_TIMESTAMP
+                updated_at = CURRENT_TIMESTAMP
 
-            WHERE id=$2
-            `,
+            WHERE id = $2
 
-            [
-                newPremiumUntil,
-                userId
-            ]
+        `, [
 
-        );
+            newPremiumUntil,
+            userId
 
+        ]);
+
+
+        /* ----------------------------------------------------
+           VALIDATION PAIEMENT
+        ---------------------------------------------------- */
 
         const updatedPayment =
-            await client.query(
+            await client.query(`
 
-                `
                 UPDATE paiements
 
                 SET
 
-                    status='validated',
+                    status = 'validated',
 
-                    validated_at=
+                    validated_at =
                         CURRENT_TIMESTAMP,
 
-                    updated_at=
+                    updated_at =
                         CURRENT_TIMESTAMP
 
-                WHERE id=$1
+                WHERE id = $1
 
                 RETURNING *
-                `,
 
-                [id]
-
-            );
+            `, [id]);
 
 
         await client.query(
@@ -3872,17 +4069,25 @@ async function validatePayment(req, res) {
         );
 
 
-        await logActivity(
+        try {
 
-            "VALIDATE_PAYMENT",
+            await logActivity(
+                "VALIDATE_PAYMENT",
+                `Paiement #${id} validé - Premium activé`,
+                userId,
+                id
+            );
 
-            `Paiement ${id} validé - Premium activé`,
+        }
 
-            userId,
+        catch (logError) {
 
-            id
+            console.error(
+                "LOG VALIDATION ERROR:",
+                logError
+            );
 
-        );
+        }
 
 
         return success(
@@ -3911,11 +4116,13 @@ async function validatePayment(req, res) {
 
             },
 
-            "Paiement validé et Premium activé"
+            "Paiement validé et Premium activé."
 
         );
 
-    } catch (err) {
+    }
+
+    catch (err) {
 
         try {
 
@@ -3923,22 +4130,27 @@ async function validatePayment(req, res) {
                 "ROLLBACK"
             );
 
-        } catch (_) {}
+        }
+
+        catch (_) {}
+
+
+        console.error(
+            "VALIDATE PAYMENT ERROR:",
+            err
+        );
 
 
         return error(
-
             res,
-
             "Impossible de valider le paiement.",
-
             500,
-
             err.message
-
         );
 
-    } finally {
+    }
+
+    finally {
 
         client.release();
 
@@ -3948,29 +4160,21 @@ async function validatePayment(req, res) {
 
 
 app.patch(
-
     "/api/paiements/:id/valider",
-
     adminAuth,
-
     validatePayment
-
 );
 
 
 app.patch(
-
     "/api/admin/paiements/:id/valider",
-
     adminAuth,
-
     validatePayment
-
 );
 
 
 /* ============================================================
-   36. REFUS PAIEMENT
+   36. REFUSER UN PAIEMENT
 ============================================================ */
 
 async function refusePayment(req, res) {
@@ -3978,105 +4182,99 @@ async function refusePayment(req, res) {
     try {
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
 
             return error(
-
                 res,
-
                 "ID paiement invalide.",
-
                 400
-
             );
 
         }
 
 
+        const body =
+            req.body || {};
+
+
         const reason =
-            req.body.reason ||
-            req.body.motif ||
-            req.body.refusal_reason ||
-            "Paiement refusé par l'administrateur";
+            String(
+                body.reason ??
+                body.motif ??
+                body.refusal_reason ??
+                "Paiement refusé par l'administrateur"
+            ).trim();
 
 
         const result =
-            await pool.query(
+            await pool.query(`
 
-                `
                 UPDATE paiements
 
                 SET
 
-                    status='refused',
+                    status = 'refused',
 
-                    refusal_reason=$1,
+                    refusal_reason = $1,
 
-                    refused_at=
+                    refused_at =
                         CURRENT_TIMESTAMP,
 
-                    updated_at=
+                    updated_at =
                         CURRENT_TIMESTAMP
 
-                WHERE id=$2
+                WHERE id = $2
 
                 AND LOWER(
-                    COALESCE(status,'pending')
+                    COALESCE(status, 'pending')
                 ) <> 'validated'
 
                 RETURNING *
-                `,
 
-                [
-                    reason,
-                    id
-                ]
+            `, [
 
-            );
+                reason,
+                id
+
+            ]);
 
 
         if (!result.rows.length) {
 
             const check =
-                await pool.query(
+                await pool.query(`
 
-                    `
-                    SELECT id,status
+                    SELECT
+                        id,
+                        status
+
                     FROM paiements
-                    WHERE id=$1
-                    `,
 
-                    [id]
+                    WHERE id = $1
 
-                );
+                `, [id]);
 
 
             if (!check.rows.length) {
 
                 return error(
-
                     res,
-
                     "Paiement introuvable.",
-
                     404
-
                 );
 
             }
 
 
             return error(
-
                 res,
-
-                "Un paiement déjà validé ne peut pas être refusé.",
-
+                "Ce paiement est déjà validé.",
                 409
-
             );
 
         }
@@ -4086,41 +4284,48 @@ async function refusePayment(req, res) {
             result.rows[0];
 
 
-        await logActivity(
+        try {
 
-            "REFUSE_PAYMENT",
+            await logActivity(
+                "REFUSE_PAYMENT",
+                `Paiement #${id} refusé : ${reason}`,
+                payment.user_id,
+                id
+            );
 
-            `Paiement ${id} refusé : ${reason}`,
+        }
 
-            payment.user_id,
+        catch (logError) {
 
-            id
+            console.error(
+                "LOG REFUSE ERROR:",
+                logError
+            );
 
-        );
+        }
 
 
         return success(
-
             res,
-
             payment,
-
-            "Paiement refusé"
-
+            "Paiement refusé."
         );
 
-    } catch (err) {
+    }
+
+    catch (err) {
+
+        console.error(
+            "REFUSE PAYMENT ERROR:",
+            err
+        );
+
 
         return error(
-
             res,
-
             "Impossible de refuser le paiement.",
-
             500,
-
             err.message
-
         );
 
     }
@@ -4129,29 +4334,21 @@ async function refusePayment(req, res) {
 
 
 app.patch(
-
     "/api/paiements/:id/refuser",
-
     adminAuth,
-
     refusePayment
-
 );
 
 
 app.patch(
-
     "/api/admin/paiements/:id/refuser",
-
     adminAuth,
-
     refusePayment
-
 );
 
 
 /* ============================================================
-   37. MODIFIER PAIEMENT
+   37. MODIFIER UN PAIEMENT
 ============================================================ */
 
 async function updatePayment(req, res) {
@@ -4159,19 +4356,17 @@ async function updatePayment(req, res) {
     try {
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
 
             return error(
-
                 res,
-
                 "ID paiement invalide.",
-
                 400
-
             );
 
         }
@@ -4183,191 +4378,154 @@ async function updatePayment(req, res) {
 
         const status =
             body.status !== undefined
-                ? body.status
+                ? String(body.status)
                 : null;
 
+
         const reference =
-            body.reference ||
-            body.transaction_id ||
-            body.transactionId ||
+            body.reference ??
+            body.transaction_id ??
+            body.transactionId ??
             null;
 
+
         const method =
-            body.method ||
-            body.methode ||
-            body.mode_paiement ||
+            body.method ??
+            body.methode ??
+            body.mode_paiement ??
             null;
+
 
         const notes =
             body.notes !== undefined
                 ? body.notes
                 : null;
 
+
         const refusalReason =
-            body.refusal_reason ||
-            body.reason ||
-            body.motif ||
+            body.refusal_reason ??
+            body.reason ??
+            body.motif ??
             null;
+
 
         const amount =
             body.amount ??
             body.montant ??
             null;
 
+
         const currency =
-            body.currency ||
+            body.currency ??
+            null;
+
+
+        const proof =
+            body.proof ??
+            body.preuve ??
+            body.image ??
             null;
 
 
         const result =
-            await pool.query(
+            await pool.query(`
 
-                `
                 UPDATE paiements
 
                 SET
 
                     status =
-                        COALESCE(
-                            $1,
-                            status
-                        ),
+                        COALESCE($1, status),
 
                     reference =
-                        COALESCE(
-                            $2,
-                            reference
-                        ),
-
-                    transaction_id =
-                        COALESCE(
-                            $2,
-                            transaction_id
-                        ),
-
-                    methode =
-                        COALESCE(
-                            $3,
-                            methode
-                        ),
+                        COALESCE($2, reference),
 
                     method =
-                        COALESCE(
-                            $3,
-                            method
-                        ),
+                        COALESCE($3, method),
 
                     amount =
-                        COALESCE(
-                            $4,
-                            amount
-                        ),
-
-                    montant =
-                        COALESCE(
-                            $4,
-                            montant
-                        ),
+                        COALESCE($4, amount),
 
                     currency =
-                        COALESCE(
-                            $5,
-                            currency
-                        ),
+                        COALESCE($5, currency),
 
                     notes =
-                        COALESCE(
-                            $6,
-                            notes
-                        ),
+                        COALESCE($6, notes),
 
                     refusal_reason =
-                        COALESCE(
-                            $7,
-                            refusal_reason
-                        ),
+                        COALESCE($7, refusal_reason),
+
+                    proof =
+                        COALESCE($8, proof),
 
                     updated_at =
                         CURRENT_TIMESTAMP
 
-                WHERE id=$8
+                WHERE id = $9
 
                 RETURNING *
-                `,
 
-                [
+            `, [
 
-                    status,
+                status,
+                reference,
+                method,
+                amount,
+                currency,
+                notes,
+                refusalReason,
+                proof,
+                id
 
-                    reference,
-
-                    method,
-
-                    amount,
-
-                    currency,
-
-                    notes,
-
-                    refusalReason,
-
-                    id
-
-                ]
-
-            );
+            ]);
 
 
         if (!result.rows.length) {
 
             return error(
-
                 res,
-
                 "Paiement introuvable.",
-
                 404
-
             );
 
         }
 
 
-        await logActivity(
+        try {
 
-            "UPDATE_PAYMENT",
+            await logActivity(
+                "UPDATE_PAYMENT",
+                `Paiement #${id} modifié`,
+                result.rows[0].user_id,
+                id
+            );
 
-            `Paiement ${id} modifié`,
+        }
 
-            result.rows[0].user_id,
-
-            id
-
-        );
+        catch (_) {}
 
 
         return success(
-
             res,
-
             result.rows[0],
-
-            "Paiement modifié"
-
+            "Paiement modifié."
         );
 
-    } catch (err) {
+    }
+
+    catch (err) {
+
+        console.error(
+            "UPDATE PAYMENT ERROR:",
+            err
+        );
+
 
         return error(
-
             res,
-
             "Impossible de modifier le paiement.",
-
             500,
-
             err.message
-
         );
 
     }
@@ -4376,165 +4534,138 @@ async function updatePayment(req, res) {
 
 
 app.put(
-
     "/api/paiements/:id",
-
     adminAuth,
-
     updatePayment
-
 );
 
 
 app.patch(
-
     "/api/paiements/:id",
-
     adminAuth,
-
     updatePayment
-
 );
 
 
 /* ============================================================
-   38. SUPPRIMER PAIEMENT
+   38. SUPPRIMER UN PAIEMENT
 ============================================================ */
 
 app.delete(
-
     "/api/paiements/:id",
-
     adminAuth,
-
     async function(req, res) {
 
         try {
 
             const id =
-                parseId(req.params.id);
+                parseId(
+                    req.params.id
+                );
 
 
             if (!id) {
 
                 return error(
-
                     res,
-
                     "ID paiement invalide.",
-
                     400
-
                 );
 
             }
 
 
             const result =
-                await pool.query(
+                await pool.query(`
 
-                    `
                     DELETE FROM paiements
 
-                    WHERE id=$1
+                    WHERE id = $1
 
                     RETURNING
                         id,
                         user_id
-                    `,
 
-                    [id]
-
-                );
+                `, [id]);
 
 
             if (!result.rows.length) {
 
                 return error(
-
                     res,
-
                     "Paiement introuvable.",
-
                     404
-
                 );
 
             }
 
 
-            await logActivity(
+            try {
 
-                "DELETE_PAYMENT",
+                await logActivity(
+                    "DELETE_PAYMENT",
+                    `Paiement #${id} supprimé`,
+                    result.rows[0].user_id,
+                    id
+                );
 
-                `Paiement ${id} supprimé`,
+            }
 
-                null,
-
-                id
-
-            );
+            catch (_) {}
 
 
             return success(
-
                 res,
-
                 result.rows[0],
-
-                "Paiement supprimé"
-
+                "Paiement supprimé."
             );
 
-        } catch (err) {
+        }
+
+        catch (err) {
+
+            console.error(
+                "DELETE PAYMENT ERROR:",
+                err
+            );
+
 
             return error(
-
                 res,
-
                 "Impossible de supprimer le paiement.",
-
                 500,
-
                 err.message
-
             );
 
         }
 
     }
-
 );
 
 
 /* ============================================================
-   39. PREMIUM MANUEL
+   39. PREMIUM MANUEL ADMIN
 ============================================================ */
 
 app.patch(
-
     "/api/admin/users/:id/premium",
-
     adminAuth,
-
     async function(req, res) {
 
         try {
 
             const id =
-                parseId(req.params.id);
+                parseId(
+                    req.params.id
+                );
 
 
             if (!id) {
 
                 return error(
-
                     res,
-
                     "ID utilisateur invalide.",
-
                     400
-
                 );
 
             }
@@ -4565,54 +4696,43 @@ app.patch(
             ) {
 
                 return error(
-
                     res,
-
                     "Nombre de jours Premium invalide.",
-
                     400
-
                 );
 
             }
 
 
-            let premiumUntil =
-                null;
+            const existing =
+                await pool.query(`
+
+                    SELECT
+                        id,
+                        premium_until
+
+                    FROM users
+
+                    WHERE id = $1
+
+                `, [id]);
+
+
+            if (!existing.rows.length) {
+
+                return error(
+                    res,
+                    "Utilisateur introuvable.",
+                    404
+                );
+
+            }
+
+
+            let premiumUntil = null;
 
 
             if (enabled) {
-
-                const existing =
-                    await pool.query(
-
-                        `
-                        SELECT premium_until
-
-                        FROM users
-
-                        WHERE id=$1
-                        `,
-
-                        [id]
-
-                    );
-
-
-                if (!existing.rows.length) {
-
-                    return error(
-
-                        res,
-
-                        "Utilisateur introuvable.",
-
-                        404
-
-                    );
-
-                }
-
 
                 const now =
                     new Date();
@@ -4623,8 +4743,7 @@ app.patch(
 
 
                 if (
-                    existing.rows[0]
-                        .premium_until
+                    existing.rows[0].premium_until
                 ) {
 
                     const current =
@@ -4659,23 +4778,22 @@ app.patch(
 
 
             const result =
-                await pool.query(
+                await pool.query(`
 
-                    `
                     UPDATE users
 
                     SET
 
-                        premium=$1,
+                        premium = $1,
 
-                        is_premium=$1,
+                        is_premium = $1,
 
-                        premium_until=$2,
+                        premium_until = $2,
 
-                        updated_at=
+                        updated_at =
                             CURRENT_TIMESTAMP
 
-                    WHERE id=$3
+                    WHERE id = $3
 
                     RETURNING
 
@@ -4685,49 +4803,35 @@ app.patch(
                         premium,
                         is_premium,
                         premium_until
-                    `,
 
-                    [
+                `, [
 
-                        enabled,
+                    enabled,
+                    premiumUntil,
+                    id
 
-                        premiumUntil,
-
-                        id
-
-                    ]
-
-                );
+                ]);
 
 
-            if (!result.rows.length) {
+            try {
 
-                return error(
+                await logActivity(
 
-                    res,
+                    enabled
+                        ? "ENABLE_PREMIUM"
+                        : "DISABLE_PREMIUM",
 
-                    "Utilisateur introuvable.",
+                    enabled
+                        ? `Premium activé pour utilisateur ${id} pendant ${days} jours`
+                        : `Premium désactivé pour utilisateur ${id}`,
 
-                    404
+                    id
 
                 );
 
             }
 
-
-            await logActivity(
-
-                enabled
-                    ? "ENABLE_PREMIUM"
-                    : "DISABLE_PREMIUM",
-
-                enabled
-                    ? `Premium activé pour utilisateur ${id} pendant ${days} jours`
-                    : `Premium désactivé pour utilisateur ${id}`,
-
-                id
-
-            );
+            catch (_) {}
 
 
             return success(
@@ -4746,31 +4850,32 @@ app.patch(
                 },
 
                 enabled
-                    ? "Premium activé"
-                    : "Premium désactivé"
-
-            );
-
-        } catch (err) {
-
-            return error(
-
-                res,
-
-                "Impossible de modifier Premium.",
-
-                500,
-
-                err.message
+                    ? "Premium activé."
+                    : "Premium désactivé."
 
             );
 
         }
 
+        catch (err) {
+
+            console.error(
+                "PREMIUM ERROR:",
+                err
+            );
+
+
+            return error(
+                res,
+                "Impossible de modifier Premium.",
+                500,
+                err.message
+            );
+
+        }
+
     }
-
 );
-
 
 /* ============================================================
    40. BLOQUER / DÉBLOQUER UTILISATEUR
