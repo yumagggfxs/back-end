@@ -1,13 +1,13 @@
 /* ============================================================
    BMJ SERVICE
-   BACKEND COMPLET
+   BACKEND API COMPLET
    NODE.JS + EXPRESS + POSTGRESQL
    DESTINATION : RENDER
 
-   VERSION : 12.0.0
+   VERSION : 13.0.0
 
    ============================================================
-   FONCTIONS
+   FONCTIONNALITÉS
    ------------------------------------------------------------
    - PostgreSQL
    - CORS
@@ -16,23 +16,37 @@
    - Authentification administrateur
    - Dashboard administrateur
    - Gestion utilisateurs
-   - Modification utilisateur
-   - Suppression utilisateur
+   - Modification utilisateurs
+   - Suppression utilisateurs
    - Blocage / déblocage
-   - Gestion Premium
-   - Création paiement
-   - Paiement manuel
-   - Liste paiements
-   - Validation paiement
-   - Refus paiement
-   - Modification paiement
-   - Suppression paiement
+   - Activation / désactivation Premium
+   - Système de paiements existant
+   - NOUVEAU système séparé de demandes de paiement
+   - Validation demande de paiement
+   - Refus demande de paiement
+   - Activation automatique Premium
    - Statistiques
-   - Journal activité admin
+   - Journal administrateur
    - Health check
-   - Liste complète des routes
+   - Graceful shutdown
 
-   ============================================================ */
+   IMPORTANT
+   ------------------------------------------------------------
+   La nouvelle page de demande de paiement utilise :
+
+       POST /api/demandes-paiement
+
+   Elle n'utilise PAS :
+
+       POST /api/paiements
+
+   Données de la nouvelle demande :
+
+       user_id
+       telephone_paiement
+       reference_paiement
+
+============================================================ */
 
 
 /* ============================================================
@@ -51,7 +65,8 @@ const crypto = require("crypto");
 
 const app = express();
 
-const PORT = process.env.PORT || 10000;
+const PORT =
+    process.env.PORT || 10000;
 
 
 /* ============================================================
@@ -59,24 +74,29 @@ const PORT = process.env.PORT || 10000;
 ============================================================ */
 
 const DATABASE_URL =
+    process.env.DATABASE_URL ||
     "postgresql://bmj_db_user:5FSX8YeJNzwinKdFOrIeEC43aQsuzf91@dpg-d9sdlt49v7es73emrq8g-a/bmj_db";
 
 
-const pool = new Pool({
+const pool =
+    new Pool({
 
-    connectionString: DATABASE_URL,
+        connectionString:
+            DATABASE_URL,
 
-    ssl: {
-        rejectUnauthorized: false
-    },
+        ssl: {
+            rejectUnauthorized: false
+        },
 
-    max: 10,
+        max: 10,
 
-    idleTimeoutMillis: 30000,
+        idleTimeoutMillis:
+            30000,
 
-    connectionTimeoutMillis: 10000
+        connectionTimeoutMillis:
+            10000
 
-});
+    });
 
 
 /* ============================================================
@@ -84,12 +104,17 @@ const pool = new Pool({
 ============================================================ */
 
 const ADMIN_EMAIL =
+    process.env.ADMIN_EMAIL ||
     "admin@bmjservice.com";
 
+
 const ADMIN_PASSWORD =
+    process.env.ADMIN_PASSWORD ||
     "BMJAdmin@2026";
 
+
 const ADMIN_SECRET =
+    process.env.ADMIN_SECRET ||
     "BMJ_SERVICE_ADMIN_SECRET_2026_CHANGE_ME_9X7K2P";
 
 
@@ -162,7 +187,10 @@ app.use(
     function(req, res, next) {
 
         console.log(
-            `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
+
+            `[${new Date().toISOString()}] ` +
+            `${req.method} ${req.originalUrl}`
+
         );
 
         next();
@@ -240,13 +268,22 @@ function error(
 
 function parseId(value) {
 
-    const id = Number(value);
+    const id =
+        Number(value);
 
-    if (!Number.isInteger(id) || id <= 0) {
+
+    if (
+
+        !Number.isInteger(id) ||
+
+        id <= 0
+
+    ) {
 
         return null;
 
     }
+
 
     return id;
 
@@ -256,27 +293,55 @@ function parseId(value) {
 function normalizeEmail(email) {
 
     return String(email || "")
+
         .trim()
+
         .toLowerCase();
 
 }
 
 
-function getBoolean(value, defaultValue = false) {
+function getBoolean(
 
-    if (value === undefined || value === null) {
+    value,
+
+    defaultValue = false
+
+) {
+
+    if (
+
+        value === undefined ||
+
+        value === null
+
+    ) {
 
         return defaultValue;
 
     }
 
-    if (typeof value === "boolean") {
+
+    if (
+
+        typeof value === "boolean"
+
+    ) {
 
         return value;
 
     }
 
-    return String(value).toLowerCase() === "true";
+
+    return (
+
+        String(value)
+
+            .trim()
+
+            .toLowerCase() === "true"
+
+    );
 
 }
 
@@ -290,27 +355,47 @@ function generateToken() {
     const timestamp =
         Date.now().toString();
 
+
     const random =
         crypto
+
             .randomBytes(32)
+
             .toString("hex");
 
+
     const payload =
-        timestamp + "." + random;
+        timestamp +
+        "." +
+        random;
+
 
     const signature =
         crypto
+
             .createHmac(
+
                 "sha256",
+
                 ADMIN_SECRET
+
             )
+
             .update(payload)
+
             .digest("hex");
 
+
     return Buffer
+
         .from(
-            payload + "." + signature
+
+            payload +
+            "." +
+            signature
+
         )
+
         .toString("base64url");
 
 }
@@ -326,52 +411,81 @@ function verifyToken(token) {
 
         }
 
+
         const decoded =
             Buffer
+
                 .from(
+
                     token,
+
                     "base64url"
+
                 )
+
                 .toString("utf8");
+
 
         const parts =
             decoded.split(".");
 
-        if (parts.length !== 3) {
-
-            return false;
-
-        }
-
-        const timestamp =
-            parts[0];
-
-        const random =
-            parts[1];
-
-        const signature =
-            parts[2];
-
-        const payload =
-            timestamp + "." + random;
-
-        const expected =
-            crypto
-                .createHmac(
-                    "sha256",
-                    ADMIN_SECRET
-                )
-                .update(payload)
-                .digest("hex");
 
         if (
-            signature.length !==
-            expected.length
+
+            parts.length !== 3
+
         ) {
 
             return false;
 
         }
+
+
+        const timestamp =
+            parts[0];
+
+
+        const random =
+            parts[1];
+
+
+        const signature =
+            parts[2];
+
+
+        const payload =
+            timestamp +
+            "." +
+            random;
+
+
+        const expected =
+            crypto
+
+                .createHmac(
+
+                    "sha256",
+
+                    ADMIN_SECRET
+
+                )
+
+                .update(payload)
+
+                .digest("hex");
+
+
+        if (
+
+            signature.length !==
+            expected.length
+
+        ) {
+
+            return false;
+
+        }
+
 
         const validSignature =
             crypto.timingSafeEqual(
@@ -382,37 +496,50 @@ function verifyToken(token) {
 
             );
 
+
         if (!validSignature) {
 
             return false;
 
         }
 
-        /*
-           Expiration du token :
-           24 heures
-        */
 
         const tokenTime =
             Number(timestamp);
 
-        if (!Number.isFinite(tokenTime)) {
-
-            return false;
-
-        }
-
-        const maxAge =
-            24 * 60 * 60 * 1000;
 
         if (
-            Date.now() - tokenTime >
-            maxAge
+
+            !Number.isFinite(
+                tokenTime
+            )
+
         ) {
 
             return false;
 
         }
+
+
+        const maxAge =
+            24 *
+            60 *
+            60 *
+            1000;
+
+
+        if (
+
+            Date.now() -
+            tokenTime >
+            maxAge
+
+        ) {
+
+            return false;
+
+        }
+
 
         return true;
 
@@ -434,30 +561,48 @@ function adminAuth(req, res, next) {
     const authorization =
         req.headers.authorization || "";
 
+
     let token = "";
 
+
     if (
-        authorization.startsWith("Bearer ")
+
+        authorization.startsWith(
+            "Bearer "
+        )
+
     ) {
 
         token =
-            authorization.substring(7).trim();
+            authorization
+
+                .substring(7)
+
+                .trim();
 
     }
 
-    /*
-       Compatibilité avec :
-       /api/xxx?token=...
-    */
 
-    if (!token && req.query.token) {
+    if (
+
+        !token &&
+        req.query.token
+
+    ) {
 
         token =
-            String(req.query.token);
+            String(
+                req.query.token
+            );
 
     }
 
-    if (!verifyToken(token)) {
+
+    if (
+
+        !verifyToken(token)
+
+    ) {
 
         return error(
 
@@ -471,13 +616,17 @@ function adminAuth(req, res, next) {
 
     }
 
+
     req.admin = {
 
-        email: ADMIN_EMAIL,
+        email:
+            ADMIN_EMAIL,
 
-        role: "administrator"
+        role:
+            "administrator"
 
     };
+
 
     next();
 
@@ -518,11 +667,17 @@ async function logActivity(
             `,
 
             [
+
                 action,
+
                 description,
+
                 userId,
+
                 paymentId,
+
                 ADMIN_EMAIL
+
             ]
 
         );
@@ -530,8 +685,11 @@ async function logActivity(
     } catch (err) {
 
         console.error(
+
             "Erreur journal admin :",
+
             err.message
+
         );
 
     }
@@ -547,6 +705,7 @@ async function initDatabase() {
 
     const client =
         await pool.connect();
+
 
     try {
 
@@ -599,7 +758,7 @@ async function initDatabase() {
 
 
         /* ====================================================
-           PAIEMENTS
+           PAIEMENTS EXISTANTS
         ==================================================== */
 
         await client.query(`
@@ -691,85 +850,144 @@ async function initDatabase() {
 
 
         /* ====================================================
+           NOUVELLE TABLE :
+           DEMANDES DE PAIEMENT
+        ==================================================== */
+
+        await client.query(`
+
+            CREATE TABLE IF NOT EXISTS demandes_paiement (
+
+                id SERIAL PRIMARY KEY,
+
+                user_id INTEGER NOT NULL,
+
+                telephone_paiement VARCHAR(100) NOT NULL,
+
+                reference_paiement VARCHAR(255) NOT NULL,
+
+                status VARCHAR(50)
+                    DEFAULT 'pending',
+
+                refusal_reason TEXT,
+
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                validated_at TIMESTAMP NULL,
+
+                refused_at TIMESTAMP NULL,
+
+                updated_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
+
+            );
+
+        `);
+
+
+        /* ====================================================
            MIGRATIONS USERS
         ==================================================== */
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS nom VARCHAR(255);
+            ADD COLUMN IF NOT EXISTS nom
+            VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+            ADD COLUMN IF NOT EXISTS email
+            VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS telephone VARCHAR(100);
+            ADD COLUMN IF NOT EXISTS telephone
+            VARCHAR(100);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS domaine VARCHAR(255);
+            ADD COLUMN IF NOT EXISTS domaine
+            VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS password TEXT;
+            ADD COLUMN IF NOT EXISTS password
+            TEXT;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS photo TEXT;
+            ADD COLUMN IF NOT EXISTS photo
+            TEXT;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS premium BOOLEAN DEFAULT FALSE;
+            ADD COLUMN IF NOT EXISTS premium
+            BOOLEAN DEFAULT FALSE;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;
+            ADD COLUMN IF NOT EXISTS is_premium
+            BOOLEAN DEFAULT FALSE;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS premium_until TIMESTAMP NULL;
+            ADD COLUMN IF NOT EXISTS premium_until
+            TIMESTAMP NULL;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT FALSE;
+            ADD COLUMN IF NOT EXISTS blocked
+            BOOLEAN DEFAULT FALSE;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
+            ADD COLUMN IF NOT EXISTS is_blocked
+            BOOLEAN DEFAULT FALSE;
 
         `);
+
 
         await client.query(`
 
@@ -778,6 +996,7 @@ async function initDatabase() {
             TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
         `);
+
 
         await client.query(`
 
@@ -795,134 +1014,170 @@ async function initDatabase() {
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+            ADD COLUMN IF NOT EXISTS user_id
+            INTEGER NULL;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS nom VARCHAR(255);
+            ADD COLUMN IF NOT EXISTS nom
+            VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+            ADD COLUMN IF NOT EXISTS email
+            VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS telephone VARCHAR(100);
+            ADD COLUMN IF NOT EXISTS telephone
+            VARCHAR(100);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS amount NUMERIC(15,2)
+            ADD COLUMN IF NOT EXISTS amount
+            NUMERIC(15,2)
             DEFAULT 0;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS montant NUMERIC(15,2)
+            ADD COLUMN IF NOT EXISTS montant
+            NUMERIC(15,2)
             DEFAULT 0;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS currency VARCHAR(20)
+            ADD COLUMN IF NOT EXISTS currency
+            VARCHAR(20)
             DEFAULT 'USD';
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS methode VARCHAR(100);
+            ADD COLUMN IF NOT EXISTS methode
+            VARCHAR(100);
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS method VARCHAR(100);
+            ADD COLUMN IF NOT EXISTS method
+            VARCHAR(100);
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS reference VARCHAR(255);
+            ADD COLUMN IF NOT EXISTS reference
+            VARCHAR(255);
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(255);
+            ADD COLUMN IF NOT EXISTS transaction_id
+            VARCHAR(255);
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS preuve TEXT;
+            ADD COLUMN IF NOT EXISTS preuve
+            TEXT;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS proof TEXT;
+            ADD COLUMN IF NOT EXISTS proof
+            TEXT;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS status VARCHAR(50)
+            ADD COLUMN IF NOT EXISTS status
+            VARCHAR(50)
             DEFAULT 'pending';
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS premium_days INTEGER
+            ADD COLUMN IF NOT EXISTS premium_days
+            INTEGER
             DEFAULT 30;
 
         `);
 
-        await client.query(`
-
-            ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS notes TEXT;
-
-        `);
 
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS refusal_reason TEXT;
+            ADD COLUMN IF NOT EXISTS notes
+            TEXT;
 
         `);
+
+
+        await client.query(`
+
+            ALTER TABLE paiements
+            ADD COLUMN IF NOT EXISTS refusal_reason
+            TEXT;
+
+        `);
+
 
         await client.query(`
 
             ALTER TABLE paiements
             ADD COLUMN IF NOT EXISTS created_at
-            TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+            TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP;
 
         `);
+
 
         await client.query(`
 
@@ -932,6 +1187,7 @@ async function initDatabase() {
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
@@ -940,17 +1196,107 @@ async function initDatabase() {
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
             ADD COLUMN IF NOT EXISTS updated_at
-            TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+            TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP;
 
         `);
 
 
         /* ====================================================
-           INDEX
+           MIGRATIONS DEMANDES PAIEMENT
+        ==================================================== */
+
+        await client.query(`
+
+            ALTER TABLE demandes_paiement
+            ADD COLUMN IF NOT EXISTS user_id
+            INTEGER;
+
+        `);
+
+
+        await client.query(`
+
+            ALTER TABLE demandes_paiement
+            ADD COLUMN IF NOT EXISTS telephone_paiement
+            VARCHAR(100);
+
+        `);
+
+
+        await client.query(`
+
+            ALTER TABLE demandes_paiement
+            ADD COLUMN IF NOT EXISTS reference_paiement
+            VARCHAR(255);
+
+        `);
+
+
+        await client.query(`
+
+            ALTER TABLE demandes_paiement
+            ADD COLUMN IF NOT EXISTS status
+            VARCHAR(50)
+            DEFAULT 'pending';
+
+        `);
+
+
+        await client.query(`
+
+            ALTER TABLE demandes_paiement
+            ADD COLUMN IF NOT EXISTS refusal_reason
+            TEXT;
+
+        `);
+
+
+        await client.query(`
+
+            ALTER TABLE demandes_paiement
+            ADD COLUMN IF NOT EXISTS created_at
+            TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP;
+
+        `);
+
+
+        await client.query(`
+
+            ALTER TABLE demandes_paiement
+            ADD COLUMN IF NOT EXISTS validated_at
+            TIMESTAMP NULL;
+
+        `);
+
+
+        await client.query(`
+
+            ALTER TABLE demandes_paiement
+            ADD COLUMN IF NOT EXISTS refused_at
+            TIMESTAMP NULL;
+
+        `);
+
+
+        await client.query(`
+
+            ALTER TABLE demandes_paiement
+            ADD COLUMN IF NOT EXISTS updated_at
+            TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP;
+
+        `);
+
+
+        /* ====================================================
+           INDEX USERS
         ==================================================== */
 
         await client.query(`
@@ -980,6 +1326,10 @@ async function initDatabase() {
         `);
 
 
+        /* ====================================================
+           INDEX PAIEMENTS
+        ==================================================== */
+
         await client.query(`
 
             CREATE INDEX IF NOT EXISTS
@@ -1007,15 +1357,55 @@ async function initDatabase() {
         `);
 
 
+        /* ====================================================
+           INDEX DEMANDES PAIEMENT
+        ==================================================== */
+
+        await client.query(`
+
+            CREATE INDEX IF NOT EXISTS
+            idx_demandes_paiement_user
+            ON demandes_paiement(user_id);
+
+        `);
+
+
+        await client.query(`
+
+            CREATE INDEX IF NOT EXISTS
+            idx_demandes_paiement_status
+            ON demandes_paiement(status);
+
+        `);
+
+
+        await client.query(`
+
+            CREATE INDEX IF NOT EXISTS
+            idx_demandes_paiement_created
+            ON demandes_paiement(created_at);
+
+        `);
+
+
         console.log(
             "Base PostgreSQL prête."
         );
 
+
+        console.log(
+            "Table demandes_paiement prête."
+        );
+
+
     } catch (err) {
 
         console.error(
+
             "Erreur initialisation PostgreSQL :",
+
             err
+
         );
 
         throw err;
@@ -1033,60 +1423,75 @@ async function initDatabase() {
    14. ROUTE /
 ============================================================ */
 
-app.get("/", function(req, res) {
+app.get(
 
-    res.json({
+    "/",
 
-        success: true,
+    function(req, res) {
 
-        service:
-            "BMJ SERVICE BACKEND",
+        res.json({
 
-        version:
-            "12.0.0",
+            success: true,
 
-        status:
-            "online",
+            service:
+                "BMJ SERVICE BACKEND",
 
-        database:
-            "PostgreSQL",
+            version:
+                "13.0.0",
 
-        server:
-            "Render",
+            status:
+                "online",
 
-        time:
-            new Date().toISOString()
+            database:
+                "PostgreSQL",
 
-    });
+            server:
+                "Render",
 
-});
+            time:
+                new Date().toISOString()
+
+        });
+
+    }
+
+);
 
 
 /* ============================================================
    15. ROUTE /api
 ============================================================ */
 
-app.get("/api", function(req, res) {
+app.get(
 
-    success(
+    "/api",
 
-        res,
+    function(req, res) {
 
-        {
+        success(
 
-            version: "12.0.0",
+            res,
 
-            status: "online",
+            {
 
-            service: "BMJ SERVICE API"
+                version:
+                    "13.0.0",
 
-        },
+                status:
+                    "online",
 
-        "API BMJ SERVICE opérationnelle"
+                service:
+                    "BMJ SERVICE API"
 
-    );
+            },
 
-});
+            "API BMJ SERVICE opérationnelle"
+
+        );
+
+    }
+
+);
 
 
 /* ============================================================
@@ -1121,6 +1526,8 @@ const ROUTES = [
     },
 
 
+    /* UTILISATEURS */
+
     {
         method: "POST",
         path: "/api/inscription"
@@ -1135,7 +1542,6 @@ const ROUTES = [
         method: "POST",
         path: "/api/signup"
     },
-
 
     {
         method: "POST",
@@ -1152,6 +1558,8 @@ const ROUTES = [
         path: "/api/signin"
     },
 
+
+    /* ADMIN */
 
     {
         method: "POST",
@@ -1209,6 +1617,8 @@ const ROUTES = [
     },
 
 
+    /* UTILISATEURS */
+
     {
         method: "GET",
         path: "/api/utilisateurs"
@@ -1239,7 +1649,6 @@ const ROUTES = [
         path: "/api/utilisateurs/:id"
     },
 
-
     {
         method: "GET",
         path: "/api/users"
@@ -1255,6 +1664,8 @@ const ROUTES = [
         path: "/api/users"
     },
 
+
+    /* PAIEMENTS EXISTANTS */
 
     {
         method: "GET",
@@ -1317,6 +1728,8 @@ const ROUTES = [
     },
 
 
+    /* PREMIUM */
+
     {
         method: "PATCH",
         path: "/api/admin/users/:id/premium"
@@ -1328,6 +1741,46 @@ const ROUTES = [
     },
 
 
+    /* NOUVELLES DEMANDES DE PAIEMENT */
+
+    {
+        method: "POST",
+        path: "/api/demandes-paiement"
+    },
+
+    {
+        method: "GET",
+        path: "/api/demandes-paiement"
+    },
+
+    {
+        method: "GET",
+        path: "/api/demandes-paiement/:id"
+    },
+
+    {
+        method: "GET",
+        path: "/api/admin/demandes-paiement"
+    },
+
+    {
+        method: "GET",
+        path: "/api/admin/demandes-paiement/:id"
+    },
+
+    {
+        method: "PATCH",
+        path: "/api/admin/demandes-paiement/:id/valider"
+    },
+
+    {
+        method: "PATCH",
+        path: "/api/admin/demandes-paiement/:id/refuser"
+    },
+
+
+    /* STATISTIQUES */
+
     {
         method: "GET",
         path: "/api/statistiques"
@@ -1337,7 +1790,9 @@ const ROUTES = [
 
 
 app.get(
+
     "/api/routes",
+
     function(req, res) {
 
         success(
@@ -1346,7 +1801,8 @@ app.get(
 
             {
 
-                version: "12.0.0",
+                version:
+                    "13.0.0",
 
                 total:
                     ROUTES.length,
@@ -1361,6 +1817,7 @@ app.get(
         );
 
     }
+
 );
 
 
@@ -1369,15 +1826,20 @@ app.get(
 ============================================================ */
 
 app.get(
+
     "/api/health",
+
     async function(req, res) {
 
         try {
 
             const result =
                 await pool.query(
+
                     "SELECT NOW() AS database_time"
+
                 );
+
 
             success(
 
@@ -1385,15 +1847,19 @@ app.get(
 
                 {
 
-                    server: "online",
+                    server:
+                        "online",
 
-                    database: "connected",
+                    database:
+                        "connected",
 
                     database_time:
-                        result.rows[0].database_time,
+                        result.rows[0]
+                            .database_time,
 
                     time:
-                        new Date().toISOString()
+                        new Date()
+                            .toISOString()
 
                 },
 
@@ -1418,6 +1884,7 @@ app.get(
         }
 
     }
+
 );
 
 
@@ -1426,15 +1893,20 @@ app.get(
 ============================================================ */
 
 app.get(
+
     "/api/test-db",
+
     async function(req, res) {
 
         try {
 
             const result =
                 await pool.query(
+
                     "SELECT NOW() AS date"
+
                 );
+
 
             success(
 
@@ -1463,6 +1935,7 @@ app.get(
         }
 
     }
+
 );
 
 
@@ -1477,23 +1950,34 @@ async function registerUser(req, res) {
         const body =
             req.body || {};
 
+
         const nom =
-            String(body.nom || "")
-                .trim();
+            String(
+                body.nom || ""
+            ).trim();
+
 
         const email =
-            normalizeEmail(body.email);
+            normalizeEmail(
+                body.email
+            );
+
 
         const telephone =
-            body.telephone || null;
+            body.telephone ||
+            null;
+
 
         const domaine =
-            body.domaine || null;
+            body.domaine ||
+            null;
+
 
         const password =
             body.password ||
             body.motDePasse ||
             "";
+
 
         const photo =
             body.photo ||
@@ -1501,9 +1985,11 @@ async function registerUser(req, res) {
 
 
         if (
+
             !nom ||
             !email ||
             !password
+
         ) {
 
             return error(
@@ -1534,7 +2020,9 @@ async function registerUser(req, res) {
             );
 
 
-        if (existing.rows.length) {
+        if (
+            existing.rows.length
+        ) {
 
             return error(
 
@@ -1597,12 +2085,14 @@ async function registerUser(req, res) {
                 `,
 
                 [
+
                     nom,
                     email,
                     telephone,
                     domaine,
                     password,
                     photo
+
                 ]
 
             );
@@ -1657,10 +2147,12 @@ app.post(
     registerUser
 );
 
+
 app.post(
     "/api/register",
     registerUser
 );
+
 
 app.post(
     "/api/signup",
@@ -1681,6 +2173,7 @@ async function loginUser(req, res) {
                 req.body.email
             );
 
+
         const password =
             req.body.password ||
             req.body.motDePasse ||
@@ -1688,8 +2181,10 @@ async function loginUser(req, res) {
 
 
         if (
+
             !email ||
             !password
+
         ) {
 
             return error(
@@ -1720,7 +2215,9 @@ async function loginUser(req, res) {
             );
 
 
-        if (!result.rows.length) {
+        if (
+            !result.rows.length
+        ) {
 
             return error(
 
@@ -1740,8 +2237,10 @@ async function loginUser(req, res) {
 
 
         if (
+
             user.blocked === true ||
             user.is_blocked === true
+
         ) {
 
             return error(
@@ -1758,8 +2257,10 @@ async function loginUser(req, res) {
 
 
         if (
+
             String(user.password) !==
             String(password)
+
         ) {
 
             return error(
@@ -1775,23 +2276,20 @@ async function loginUser(req, res) {
         }
 
 
-        /*
-           Vérification Premium.
-
-           Si premium_until est dépassé,
-           on désactive automatiquement Premium.
-        */
-
         let premium =
             Boolean(
+
                 user.premium ||
                 user.is_premium
+
             );
 
 
         if (
+
             premium &&
             user.premium_until
+
         ) {
 
             const until =
@@ -1799,8 +2297,11 @@ async function loginUser(req, res) {
                     user.premium_until
                 );
 
+
             if (
+
                 until < new Date()
+
             ) {
 
                 await pool.query(
@@ -1819,6 +2320,7 @@ async function loginUser(req, res) {
                     [user.id]
 
                 );
+
 
                 premium = false;
 
@@ -1839,11 +2341,14 @@ async function loginUser(req, res) {
 
                 user: {
 
-                    id: user.id,
+                    id:
+                        user.id,
 
-                    nom: user.nom,
+                    nom:
+                        user.nom,
 
-                    email: user.email,
+                    email:
+                        user.email,
 
                     telephone:
                         user.telephone,
@@ -1900,10 +2405,12 @@ app.post(
     loginUser
 );
 
+
 app.post(
     "/api/login",
     loginUser
 );
+
 
 app.post(
     "/api/signin",
@@ -1924,6 +2431,7 @@ async function adminLogin(req, res) {
                 req.body.email
             );
 
+
         const password =
             req.body.password ||
             req.body.motDePasse ||
@@ -1931,8 +2439,10 @@ async function adminLogin(req, res) {
 
 
         if (
+
             email !==
             ADMIN_EMAIL.toLowerCase()
+
         ) {
 
             return error(
@@ -1949,8 +2459,10 @@ async function adminLogin(req, res) {
 
 
         if (
+
             password !==
             ADMIN_PASSWORD
+
         ) {
 
             return error(
@@ -2030,10 +2542,12 @@ app.post(
     adminLogin
 );
 
+
 app.post(
     "/api/admin/login",
     adminLogin
 );
+
 
 app.post(
     "/api/admin/signin",
@@ -2060,6 +2574,7 @@ app.post(
             "Déconnexion administrateur"
 
         );
+
 
         return success(
 
@@ -2182,6 +2697,35 @@ app.get(
                         )::int AS refuses,
 
                         (
+                            SELECT COUNT(*)
+                            FROM demandes_paiement
+                        )::int AS demandes_paiement,
+
+                        (
+                            SELECT COUNT(*)
+                            FROM demandes_paiement
+                            WHERE LOWER(
+                                COALESCE(status,'pending')
+                            )='pending'
+                        )::int AS demandes_en_attente,
+
+                        (
+                            SELECT COUNT(*)
+                            FROM demandes_paiement
+                            WHERE LOWER(
+                                COALESCE(status,'pending')
+                            )='validated'
+                        )::int AS demandes_validees,
+
+                        (
+                            SELECT COUNT(*)
+                            FROM demandes_paiement
+                            WHERE LOWER(
+                                COALESCE(status,'pending')
+                            )='refused'
+                        )::int AS demandes_refusees,
+
+                        (
                             SELECT COALESCE(
                                 SUM(amount),
                                 0
@@ -2190,6 +2734,7 @@ app.get(
                             WHERE LOWER(status)
                             = 'validated'
                         ) AS revenus
+
                     `
 
                 );
@@ -2203,9 +2748,11 @@ app.get(
 
                         p.*,
 
-                        u.nom AS user_nom_db,
+                        u.nom
+                            AS user_nom_db,
 
-                        u.email AS user_email_db,
+                        u.email
+                            AS user_email_db,
 
                         u.telephone
                             AS user_telephone_db
@@ -2217,6 +2764,37 @@ app.get(
 
                     ORDER BY
                         p.created_at DESC
+
+                    LIMIT 10
+                    `
+
+                );
+
+
+            const recentDemandes =
+                await pool.query(
+
+                    `
+                    SELECT
+
+                        d.*,
+
+                        u.nom
+                            AS user_nom,
+
+                        u.email
+                            AS user_email,
+
+                        u.telephone
+                            AS user_telephone
+
+                    FROM demandes_paiement d
+
+                    LEFT JOIN users u
+                        ON u.id=d.user_id
+
+                    ORDER BY
+                        d.created_at DESC
 
                     LIMIT 10
                     `
@@ -2287,8 +2865,31 @@ app.get(
                     revenus:
                         stats.revenus,
 
+                    demandes_paiement:
+                        Number(
+                            stats.demandes_paiement
+                        ),
+
+                    demandes_en_attente:
+                        Number(
+                            stats.demandes_en_attente
+                        ),
+
+                    demandes_validees:
+                        Number(
+                            stats.demandes_validees
+                        ),
+
+                    demandes_refusees:
+                        Number(
+                            stats.demandes_refusees
+                        ),
+
                     paiements_recents:
-                        recent.rows
+                        recent.rows,
+
+                    demandes_paiement_recentes:
+                        recentDemandes.rows
 
                 },
 
@@ -2475,6 +3076,7 @@ app.get(
     getUsersPublic
 );
 
+
 app.get(
     "/api/users",
     getUsersPublic
@@ -2490,7 +3092,9 @@ async function getUserById(req, res) {
     try {
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
@@ -2585,6 +3189,7 @@ app.get(
     getUserById
 );
 
+
 app.get(
     "/api/users/:id",
     getUserById
@@ -2622,7 +3227,9 @@ async function updateUser(req, res) {
     try {
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
@@ -2649,20 +3256,26 @@ async function updateUser(req, res) {
                 ? body.nom
                 : null;
 
+
         const email =
             body.email !== undefined
-                ? normalizeEmail(body.email)
+                ? normalizeEmail(
+                    body.email
+                )
                 : null;
+
 
         const telephone =
             body.telephone !== undefined
                 ? body.telephone
                 : null;
 
+
         const domaine =
             body.domaine !== undefined
                 ? body.domaine
                 : null;
+
 
         const photo =
             body.photo !== undefined
@@ -2691,7 +3304,9 @@ async function updateUser(req, res) {
                 );
 
 
-            if (emailCheck.rows.length) {
+            if (
+                emailCheck.rows.length
+            ) {
 
                 return error(
 
@@ -2754,12 +3369,14 @@ async function updateUser(req, res) {
                 `,
 
                 [
+
                     nom,
                     email,
                     telephone,
                     domaine,
                     photo,
                     id
+
                 ]
 
             );
@@ -2851,7 +3468,9 @@ async function deleteUser(req, res) {
     try {
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
@@ -2869,15 +3488,31 @@ async function deleteUser(req, res) {
         }
 
 
+        await pool.query(
+
+            `
+            UPDATE paiements
+
+            SET user_id=NULL
+
+            WHERE user_id=$1
+            `,
+
+            [id]
+
+        );
+
+
         /*
-           On supprime les paiements associés
-           pour éviter une référence orpheline.
+           Les nouvelles demandes de paiement
+           restent conservées dans la base,
+           mais leur user_id est retiré.
         */
 
         await pool.query(
 
             `
-            UPDATE paiements
+            UPDATE demandes_paiement
 
             SET user_id=NULL
 
@@ -2972,7 +3607,7 @@ app.delete(
 
 
 /* ============================================================
-   31. LISTE DES PAIEMENTS
+   31. LISTE DES PAIEMENTS EXISTANTS
 ============================================================ */
 
 async function getPayments(req, res) {
@@ -3152,7 +3787,9 @@ async function getPaymentById(req, res) {
     try {
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
@@ -3254,7 +3891,7 @@ app.get(
 
 
 /* ============================================================
-   33. CRÉER PAIEMENT
+   33. CRÉER PAIEMENT EXISTANT
 ============================================================ */
 
 async function createPayment(req, res) {
@@ -3273,15 +3910,19 @@ async function createPayment(req, res) {
 
         const amount =
             Number(
+
                 body.amount ??
                 body.montant ??
                 0
+
             );
 
 
         if (
+
             !Number.isFinite(amount) ||
             amount < 0
+
         ) {
 
             return error(
@@ -3334,9 +3975,7 @@ async function createPayment(req, res) {
 
                     `
                     SELECT *
-
                     FROM users
-
                     WHERE id=$1
                     `,
 
@@ -3345,7 +3984,9 @@ async function createPayment(req, res) {
                 );
 
 
-            if (!userResult.rows.length) {
+            if (
+                !userResult.rows.length
+            ) {
 
                 return error(
 
@@ -3386,17 +4027,22 @@ async function createPayment(req, res) {
 
         const premiumDays =
             Number(
+
                 body.premium_days ??
                 body.premiumDays ??
                 30
+
             );
 
 
         if (
+
             !Number.isInteger(
                 premiumDays
             ) ||
+
             premiumDays <= 0
+
         ) {
 
             return error(
@@ -3417,7 +4063,6 @@ async function createPayment(req, res) {
 
                 `
                 INSERT INTO paiements
-
                 (
                     user_id,
                     nom,
@@ -3438,7 +4083,6 @@ async function createPayment(req, res) {
                 )
 
                 VALUES
-
                 (
                     $1,
                     $2,
@@ -3464,27 +4108,16 @@ async function createPayment(req, res) {
                 [
 
                     userId,
-
                     nom,
-
                     email,
-
                     telephone,
-
                     amount,
-
                     currency,
-
                     method,
-
                     reference,
-
                     proof,
-
                     premiumDays,
-
-                    body.notes ||
-                    null
+                    body.notes || null
 
                 ]
 
@@ -3546,10 +4179,6 @@ app.post(
 );
 
 
-/* ============================================================
-   34. PAIEMENT MANUEL ADMIN
-============================================================ */
-
 app.post(
 
     "/api/paiements/manual",
@@ -3573,7 +4202,7 @@ app.post(
 
 
 /* ============================================================
-   35. VALIDATION PAIEMENT
+   34. VALIDATION PAIEMENT EXISTANT
 ============================================================ */
 
 async function validatePayment(req, res) {
@@ -3590,7 +4219,9 @@ async function validatePayment(req, res) {
 
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
@@ -3598,6 +4229,7 @@ async function validatePayment(req, res) {
             await client.query(
                 "ROLLBACK"
             );
+
 
             return error(
 
@@ -3617,11 +4249,8 @@ async function validatePayment(req, res) {
 
                 `
                 SELECT *
-
                 FROM paiements
-
                 WHERE id=$1
-
                 FOR UPDATE
                 `,
 
@@ -3630,11 +4259,14 @@ async function validatePayment(req, res) {
             );
 
 
-        if (!paymentResult.rows.length) {
+        if (
+            !paymentResult.rows.length
+        ) {
 
             await client.query(
                 "ROLLBACK"
             );
+
 
             return error(
 
@@ -3667,6 +4299,7 @@ async function validatePayment(req, res) {
                 "ROLLBACK"
             );
 
+
             return error(
 
                 res,
@@ -3687,6 +4320,7 @@ async function validatePayment(req, res) {
             await client.query(
                 "ROLLBACK"
             );
+
 
             return error(
 
@@ -3711,6 +4345,7 @@ async function validatePayment(req, res) {
                 "ROLLBACK"
             );
 
+
             return error(
 
                 res,
@@ -3729,11 +4364,8 @@ async function validatePayment(req, res) {
 
                 `
                 SELECT *
-
                 FROM users
-
                 WHERE id=$1
-
                 FOR UPDATE
                 `,
 
@@ -3742,11 +4374,14 @@ async function validatePayment(req, res) {
             );
 
 
-        if (!userResult.rows.length) {
+        if (
+            !userResult.rows.length
+        ) {
 
             await client.query(
                 "ROLLBACK"
             );
+
 
             return error(
 
@@ -3788,6 +4423,7 @@ async function validatePayment(req, res) {
                 new Date(
                     user.premium_until
                 );
+
 
             if (
                 currentUntil > now
@@ -3834,8 +4470,10 @@ async function validatePayment(req, res) {
             `,
 
             [
+
                 newPremiumUntil,
                 userId
+
             ]
 
         );
@@ -3970,7 +4608,7 @@ app.patch(
 
 
 /* ============================================================
-   36. REFUS PAIEMENT
+   35. REFUS PAIEMENT EXISTANT
 ============================================================ */
 
 async function refusePayment(req, res) {
@@ -3978,7 +4616,9 @@ async function refusePayment(req, res) {
     try {
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
@@ -4031,8 +4671,10 @@ async function refusePayment(req, res) {
                 `,
 
                 [
+
                     reason,
                     id
+
                 ]
 
             );
@@ -4151,7 +4793,7 @@ app.patch(
 
 
 /* ============================================================
-   37. MODIFIER PAIEMENT
+   36. MODIFIER PAIEMENT EXISTANT
 ============================================================ */
 
 async function updatePayment(req, res) {
@@ -4159,7 +4801,9 @@ async function updatePayment(req, res) {
     try {
 
         const id =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         if (!id) {
@@ -4186,11 +4830,13 @@ async function updatePayment(req, res) {
                 ? body.status
                 : null;
 
+
         const reference =
             body.reference ||
             body.transaction_id ||
             body.transactionId ||
             null;
+
 
         const method =
             body.method ||
@@ -4198,10 +4844,12 @@ async function updatePayment(req, res) {
             body.mode_paiement ||
             null;
 
+
         const notes =
             body.notes !== undefined
                 ? body.notes
                 : null;
+
 
         const refusalReason =
             body.refusal_reason ||
@@ -4209,10 +4857,12 @@ async function updatePayment(req, res) {
             body.motif ||
             null;
 
+
         const amount =
             body.amount ??
             body.montant ??
             null;
+
 
         const currency =
             body.currency ||
@@ -4298,19 +4948,12 @@ async function updatePayment(req, res) {
                 [
 
                     status,
-
                     reference,
-
                     method,
-
                     amount,
-
                     currency,
-
                     notes,
-
                     refusalReason,
-
                     id
 
                 ]
@@ -4398,7 +5041,7 @@ app.patch(
 
 
 /* ============================================================
-   38. SUPPRIMER PAIEMENT
+   37. SUPPRIMER PAIEMENT EXISTANT
 ============================================================ */
 
 app.delete(
@@ -4412,7 +5055,9 @@ app.delete(
         try {
 
             const id =
-                parseId(req.params.id);
+                parseId(
+                    req.params.id
+                );
 
 
             if (!id) {
@@ -4508,7 +5153,7 @@ app.delete(
 
 
 /* ============================================================
-   39. PREMIUM MANUEL
+   38. PREMIUM MANUEL
 ============================================================ */
 
 app.patch(
@@ -4522,7 +5167,9 @@ app.patch(
         try {
 
             const id =
-                parseId(req.params.id);
+                parseId(
+                    req.params.id
+                );
 
 
             if (!id) {
@@ -4542,26 +5189,35 @@ app.patch(
 
             const enabled =
                 req.body.enabled !== undefined
+
                     ? getBoolean(
                         req.body.enabled
                     )
+
                     : true;
 
 
             const days =
                 Number(
+
                     req.body.days ??
                     req.body.premium_days ??
                     30
+
                 );
 
 
             if (
+
                 enabled &&
+
                 (
+
                     !Number.isInteger(days) ||
                     days <= 0
+
                 )
+
             ) {
 
                 return error(
@@ -4599,7 +5255,9 @@ app.patch(
                     );
 
 
-                if (!existing.rows.length) {
+                if (
+                    !existing.rows.length
+                ) {
 
                     return error(
 
@@ -4629,12 +5287,16 @@ app.patch(
 
                     const current =
                         new Date(
+
                             existing.rows[0]
                                 .premium_until
+
                         );
 
 
-                    if (current > now) {
+                    if (
+                        current > now
+                    ) {
 
                         base =
                             current;
@@ -4690,9 +5352,7 @@ app.patch(
                     [
 
                         enabled,
-
                         premiumUntil,
-
                         id
 
                     ]
@@ -4773,7 +5433,7 @@ app.patch(
 
 
 /* ============================================================
-   40. BLOQUER / DÉBLOQUER UTILISATEUR
+   39. BLOQUER / DÉBLOQUER UTILISATEUR
 ============================================================ */
 
 app.patch(
@@ -4787,7 +5447,9 @@ app.patch(
         try {
 
             const id =
-                parseId(req.params.id);
+                parseId(
+                    req.params.id
+                );
 
 
             if (!id) {
@@ -4807,9 +5469,11 @@ app.patch(
 
             const blocked =
                 req.body.blocked !== undefined
+
                     ? getBoolean(
                         req.body.blocked
                     )
+
                     : true;
 
 
@@ -4840,8 +5504,10 @@ app.patch(
                     `,
 
                     [
+
                         blocked,
                         id
+
                     ]
 
                 );
@@ -4911,7 +5577,1624 @@ app.patch(
 
 
 /* ============================================================
-   41. STATISTIQUES
+   40. NOUVELLE FONCTIONNALITÉ
+   DEMANDE DE PAIEMENT UTILISATEUR
+============================================================ */
+
+/*
+   IMPORTANT :
+
+   Cette route est complètement indépendante
+   de /api/paiements.
+
+   La page utilisateur doit envoyer :
+
+   POST /api/demandes-paiement
+
+   BODY :
+
+   {
+       "user_id": 12,
+       "telephone_paiement": "0991234567",
+       "reference_paiement": "ABC123456"
+   }
+
+   Rien d'autre n'est nécessaire.
+*/
+
+
+async function createPaymentRequest(req, res) {
+
+    try {
+
+        const body =
+            req.body || {};
+
+
+        const userId =
+            parseId(
+
+                body.user_id ??
+                body.userId
+
+            );
+
+
+        const telephonePaiement =
+            String(
+
+                body.telephone_paiement ??
+                body.telephonePaiement ??
+                body.numero_paiement ??
+                body.numeroPaiement ??
+                ""
+
+            ).trim();
+
+
+        const referencePaiement =
+            String(
+
+                body.reference_paiement ??
+                body.referencePaiement ??
+                body.reference ??
+                ""
+
+            ).trim();
+
+
+        /* ====================================================
+           VALIDATION
+        ==================================================== */
+
+        if (!userId) {
+
+            return error(
+
+                res,
+
+                "Utilisateur invalide.",
+
+                400
+
+            );
+
+        }
+
+
+        if (!telephonePaiement) {
+
+            return error(
+
+                res,
+
+                "Le numéro ayant effectué le paiement est obligatoire.",
+
+                400
+
+            );
+
+        }
+
+
+        if (!referencePaiement) {
+
+            return error(
+
+                res,
+
+                "La référence du paiement est obligatoire.",
+
+                400
+
+            );
+
+        }
+
+
+        if (
+
+            telephonePaiement.length < 6 ||
+            telephonePaiement.length > 100
+
+        ) {
+
+            return error(
+
+                res,
+
+                "Numéro de paiement invalide.",
+
+                400
+
+            );
+
+        }
+
+
+        if (
+
+            referencePaiement.length < 2 ||
+            referencePaiement.length > 255
+
+        ) {
+
+            return error(
+
+                res,
+
+                "Référence de paiement invalide.",
+
+                400
+
+            );
+
+        }
+
+
+        /* ====================================================
+           VÉRIFICATION UTILISATEUR
+        ==================================================== */
+
+        const userResult =
+            await pool.query(
+
+                `
+                SELECT
+
+                    id,
+                    nom,
+                    email,
+                    telephone,
+                    premium,
+                    is_premium,
+                    premium_until,
+                    blocked,
+                    is_blocked
+
+                FROM users
+
+                WHERE id=$1
+
+                LIMIT 1
+                `,
+
+                [userId]
+
+            );
+
+
+        if (!userResult.rows.length) {
+
+            return error(
+
+                res,
+
+                "Utilisateur introuvable.",
+
+                404
+
+            );
+
+        }
+
+
+        const user =
+            userResult.rows[0];
+
+
+        if (
+
+            user.blocked === true ||
+            user.is_blocked === true
+
+        ) {
+
+            return error(
+
+                res,
+
+                "Votre compte est bloqué.",
+
+                403
+
+            );
+
+        }
+
+
+        /* ====================================================
+           EMPÊCHER UNE DOUBLE DEMANDE EN ATTENTE
+        ==================================================== */
+
+        const pending =
+            await pool.query(
+
+                `
+                SELECT id
+
+                FROM demandes_paiement
+
+                WHERE user_id=$1
+
+                AND LOWER(
+                    COALESCE(status,'pending')
+                )='pending'
+
+                LIMIT 1
+                `,
+
+                [userId]
+
+            );
+
+
+        if (pending.rows.length) {
+
+            return error(
+
+                res,
+
+                "Vous avez déjà une demande de paiement en attente.",
+
+                409,
+
+                {
+
+                    demande_id:
+                        pending.rows[0].id
+
+                }
+
+            );
+
+        }
+
+
+        /* ====================================================
+           EMPÊCHER UNE RÉFÉRENCE DÉJÀ UTILISÉE
+        ==================================================== */
+
+        const referenceUsed =
+            await pool.query(
+
+                `
+                SELECT id
+
+                FROM demandes_paiement
+
+                WHERE LOWER(
+                    reference_paiement
+                )=LOWER($1)
+
+                LIMIT 1
+                `,
+
+                [referencePaiement]
+
+            );
+
+
+        if (
+            referenceUsed.rows.length
+        ) {
+
+            return error(
+
+                res,
+
+                "Cette référence de paiement a déjà été utilisée.",
+
+                409
+
+            );
+
+        }
+
+
+        /* ====================================================
+           CRÉATION
+        ==================================================== */
+
+        const result =
+            await pool.query(
+
+                `
+                INSERT INTO demandes_paiement
+                (
+                    user_id,
+                    telephone_paiement,
+                    reference_paiement,
+                    status
+                )
+
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    'pending'
+                )
+
+                RETURNING
+                    id,
+                    user_id,
+                    telephone_paiement,
+                    reference_paiement,
+                    status,
+                    created_at,
+                    updated_at
+                `,
+
+                [
+
+                    userId,
+                    telephonePaiement,
+                    referencePaiement
+
+                ]
+
+            );
+
+
+        const demande =
+            result.rows[0];
+
+
+        await logActivity(
+
+            "CREATE_PAYMENT_REQUEST",
+
+            `Demande de paiement ${demande.id} créée pour utilisateur ${userId}`,
+
+            userId
+
+        );
+
+
+        return success(
+
+            res,
+
+            {
+
+                ...demande,
+
+                user: {
+
+                    id:
+                        user.id,
+
+                    nom:
+                        user.nom,
+
+                    email:
+                        user.email
+
+                }
+
+            },
+
+            "Votre demande de paiement a été enregistrée."
+
+        );
+
+    } catch (err) {
+
+        return error(
+
+            res,
+
+            "Impossible d'enregistrer la demande de paiement.",
+
+            500,
+
+            err.message
+
+        );
+
+    }
+
+}
+
+
+/* ============================================================
+   ROUTE PRINCIPALE DEMANDE PAIEMENT
+============================================================ */
+
+app.post(
+
+    "/api/demandes-paiement",
+
+    createPaymentRequest
+
+);
+
+
+/* ============================================================
+   41. LISTE DEMANDES DE PAIEMENT
+============================================================ */
+
+async function getPaymentRequests(req, res) {
+
+    try {
+
+        const result =
+            await pool.query(
+
+                `
+                SELECT
+
+                    d.id,
+
+                    d.user_id,
+
+                    d.telephone_paiement,
+
+                    d.reference_paiement,
+
+                    d.status,
+
+                    d.refusal_reason,
+
+                    d.created_at,
+
+                    d.validated_at,
+
+                    d.refused_at,
+
+                    d.updated_at,
+
+                    u.nom
+                        AS user_nom,
+
+                    u.email
+                        AS user_email,
+
+                    u.telephone
+                        AS user_telephone,
+
+                    u.domaine
+                        AS user_domaine
+
+                FROM demandes_paiement d
+
+                LEFT JOIN users u
+                    ON u.id=d.user_id
+
+                ORDER BY
+                    d.created_at DESC
+                `
+
+            );
+
+
+        return success(
+
+            res,
+
+            result.rows,
+
+            "Demandes de paiement chargées"
+
+        );
+
+    } catch (err) {
+
+        return error(
+
+            res,
+
+            "Impossible de charger les demandes de paiement.",
+
+            500,
+
+            err.message
+
+        );
+
+    }
+
+}
+
+
+/*
+   Cette route reste disponible pour consultation,
+   mais l'administration doit utiliser la route admin
+   pour la gestion.
+*/
+
+app.get(
+
+    "/api/demandes-paiement",
+
+    getPaymentRequests
+
+);
+
+
+app.get(
+
+    "/api/admin/demandes-paiement",
+
+    adminAuth,
+
+    getPaymentRequests
+
+);
+
+
+/* ============================================================
+   42. DEMANDE DE PAIEMENT PAR ID
+============================================================ */
+
+async function getPaymentRequestById(req, res) {
+
+    try {
+
+        const id =
+            parseId(
+                req.params.id
+            );
+
+
+        if (!id) {
+
+            return error(
+
+                res,
+
+                "ID de demande invalide.",
+
+                400
+
+            );
+
+        }
+
+
+        const result =
+            await pool.query(
+
+                `
+                SELECT
+
+                    d.*,
+
+                    u.nom
+                        AS user_nom,
+
+                    u.email
+                        AS user_email,
+
+                    u.telephone
+                        AS user_telephone,
+
+                    u.domaine
+                        AS user_domaine,
+
+                    u.premium
+                        AS user_premium,
+
+                    u.is_premium
+                        AS user_is_premium,
+
+                    u.premium_until
+                        AS user_premium_until
+
+                FROM demandes_paiement d
+
+                LEFT JOIN users u
+                    ON u.id=d.user_id
+
+                WHERE d.id=$1
+
+                LIMIT 1
+                `,
+
+                [id]
+
+            );
+
+
+        if (!result.rows.length) {
+
+            return error(
+
+                res,
+
+                "Demande de paiement introuvable.",
+
+                404
+
+            );
+
+        }
+
+
+        return success(
+
+            res,
+
+            result.rows[0],
+
+            "Demande de paiement trouvée"
+
+        );
+
+    } catch (err) {
+
+        return error(
+
+            res,
+
+            "Impossible de charger la demande de paiement.",
+
+            500,
+
+            err.message
+
+        );
+
+    }
+
+}
+
+
+app.get(
+
+    "/api/demandes-paiement/:id",
+
+    getPaymentRequestById
+
+);
+
+
+app.get(
+
+    "/api/admin/demandes-paiement/:id",
+
+    adminAuth,
+
+    getPaymentRequestById
+
+);
+
+
+/* ============================================================
+   43. VALIDATION DEMANDE DE PAIEMENT
+============================================================ */
+
+/*
+   Lorsqu'une demande est validée :
+
+   1. La demande passe à "validated"
+   2. L'utilisateur passe Premium
+   3. premium_until est calculé
+   4. Le tout se fait dans une transaction PostgreSQL
+
+   IMPORTANT :
+
+   Cette validation n'utilise PAS la table paiements.
+   Elle travaille uniquement avec :
+
+       demandes_paiement
+       users
+*/
+
+
+async function validatePaymentRequest(req, res) {
+
+    const client =
+        await pool.connect();
+
+
+    try {
+
+        await client.query(
+            "BEGIN"
+        );
+
+
+        const id =
+            parseId(
+                req.params.id
+            );
+
+
+        if (!id) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+
+            return error(
+
+                res,
+
+                "ID de demande invalide.",
+
+                400
+
+            );
+
+        }
+
+
+        /* ====================================================
+           VERROUILLAGE DEMANDE
+        ==================================================== */
+
+        const demandeResult =
+            await client.query(
+
+                `
+                SELECT *
+
+                FROM demandes_paiement
+
+                WHERE id=$1
+
+                FOR UPDATE
+                `,
+
+                [id]
+
+            );
+
+
+        if (!demandeResult.rows.length) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+
+            return error(
+
+                res,
+
+                "Demande de paiement introuvable.",
+
+                404
+
+            );
+
+        }
+
+
+        const demande =
+            demandeResult.rows[0];
+
+
+        const status =
+            String(
+
+                demande.status ||
+                "pending"
+
+            ).toLowerCase();
+
+
+        if (
+            status === "validated"
+        ) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+
+            return error(
+
+                res,
+
+                "Cette demande est déjà validée.",
+
+                409
+
+            );
+
+        }
+
+
+        if (
+            status === "refused"
+        ) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+
+            return error(
+
+                res,
+
+                "Cette demande a déjà été refusée.",
+
+                409
+
+            );
+
+        }
+
+
+        const userId =
+            parseId(
+                demande.user_id
+            );
+
+
+        if (!userId) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+
+            return error(
+
+                res,
+
+                "Cette demande n'est associée à aucun utilisateur.",
+
+                400
+
+            );
+
+        }
+
+
+        /* ====================================================
+           VERROUILLAGE UTILISATEUR
+        ==================================================== */
+
+        const userResult =
+            await client.query(
+
+                `
+                SELECT *
+
+                FROM users
+
+                WHERE id=$1
+
+                FOR UPDATE
+                `,
+
+                [userId]
+
+            );
+
+
+        if (!userResult.rows.length) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+
+            return error(
+
+                res,
+
+                "Utilisateur associé introuvable.",
+
+                404
+
+            );
+
+        }
+
+
+        const user =
+            userResult.rows[0];
+
+
+        if (
+
+            user.blocked === true ||
+            user.is_blocked === true
+
+        ) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+
+            return error(
+
+                res,
+
+                "Impossible d'activer Premium pour un utilisateur bloqué.",
+
+                403
+
+            );
+
+        }
+
+
+        /* ====================================================
+           DURÉE PREMIUM
+        ==================================================== */
+
+        /*
+           La durée par défaut reste de 30 jours,
+           comme ton système Premium existant.
+        */
+
+        const days = 30;
+
+
+        const now =
+            new Date();
+
+
+        let baseDate =
+            now;
+
+
+        if (
+            user.premium_until
+        ) {
+
+            const currentUntil =
+                new Date(
+                    user.premium_until
+                );
+
+
+            if (
+                currentUntil > now
+            ) {
+
+                baseDate =
+                    currentUntil;
+
+            }
+
+        }
+
+
+        const newPremiumUntil =
+            new Date(
+                baseDate
+            );
+
+
+        newPremiumUntil.setDate(
+
+            newPremiumUntil.getDate() +
+            days
+
+        );
+
+
+        /* ====================================================
+           ACTIVATION PREMIUM
+        ==================================================== */
+
+        await client.query(
+
+            `
+            UPDATE users
+
+            SET
+
+                premium=true,
+
+                is_premium=true,
+
+                premium_until=$1,
+
+                updated_at=
+                    CURRENT_TIMESTAMP
+
+            WHERE id=$2
+            `,
+
+            [
+
+                newPremiumUntil,
+                userId
+
+            ]
+
+        );
+
+
+        /* ====================================================
+           VALIDATION DEMANDE
+        ==================================================== */
+
+        const updated =
+            await client.query(
+
+                `
+                UPDATE demandes_paiement
+
+                SET
+
+                    status='validated',
+
+                    validated_at=
+                        CURRENT_TIMESTAMP,
+
+                    refused_at=NULL,
+
+                    refusal_reason=NULL,
+
+                    updated_at=
+                        CURRENT_TIMESTAMP
+
+                WHERE id=$1
+
+                RETURNING *
+                `,
+
+                [id]
+
+            );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+
+        await logActivity(
+
+            "VALIDATE_PAYMENT_REQUEST",
+
+            `Demande de paiement ${id} validée - Premium activé pour utilisateur ${userId}`,
+
+            userId
+
+        );
+
+
+        return success(
+
+            res,
+
+            {
+
+                demande:
+                    updated.rows[0],
+
+                user_id:
+                    userId,
+
+                premium:
+                    true,
+
+                is_premium:
+                    true,
+
+                premium_until:
+                    newPremiumUntil,
+
+                premium_days:
+                    days
+
+            },
+
+            "Demande validée et Premium activé"
+
+        );
+
+    } catch (err) {
+
+        try {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+        } catch (_) {}
+
+
+        return error(
+
+            res,
+
+            "Impossible de valider la demande de paiement.",
+
+            500,
+
+            err.message
+
+        );
+
+    } finally {
+
+        client.release();
+
+    }
+
+}
+
+
+app.patch(
+
+    "/api/admin/demandes-paiement/:id/valider",
+
+    adminAuth,
+
+    validatePaymentRequest
+
+);
+
+
+/* ============================================================
+   44. REFUS DEMANDE DE PAIEMENT
+============================================================ */
+
+async function refusePaymentRequest(req, res) {
+
+    try {
+
+        const id =
+            parseId(
+                req.params.id
+            );
+
+
+        if (!id) {
+
+            return error(
+
+                res,
+
+                "ID de demande invalide.",
+
+                400
+
+            );
+
+        }
+
+
+        const body =
+            req.body || {};
+
+
+        const reason =
+            String(
+
+                body.reason ||
+                body.motif ||
+                body.refusal_reason ||
+                "Demande de paiement refusée par l'administrateur"
+
+            ).trim();
+
+
+        const result =
+            await pool.query(
+
+                `
+                UPDATE demandes_paiement
+
+                SET
+
+                    status='refused',
+
+                    refusal_reason=$1,
+
+                    refused_at=
+                        CURRENT_TIMESTAMP,
+
+                    updated_at=
+                        CURRENT_TIMESTAMP
+
+                WHERE id=$2
+
+                AND LOWER(
+                    COALESCE(status,'pending')
+                ) <> 'validated'
+
+                RETURNING *
+                `,
+
+                [
+
+                    reason,
+                    id
+
+                ]
+
+            );
+
+
+        if (!result.rows.length) {
+
+            const check =
+                await pool.query(
+
+                    `
+                    SELECT
+
+                        id,
+                        status
+
+                    FROM demandes_paiement
+
+                    WHERE id=$1
+                    `,
+
+                    [id]
+
+                );
+
+
+            if (!check.rows.length) {
+
+                return error(
+
+                    res,
+
+                    "Demande de paiement introuvable.",
+
+                    404
+
+                );
+
+            }
+
+
+            return error(
+
+                res,
+
+                "Une demande déjà validée ne peut pas être refusée.",
+
+                409
+
+            );
+
+        }
+
+
+        const demande =
+            result.rows[0];
+
+
+        await logActivity(
+
+            "REFUSE_PAYMENT_REQUEST",
+
+            `Demande ${id} refusée : ${reason}`,
+
+            demande.user_id
+
+        );
+
+
+        return success(
+
+            res,
+
+            demande,
+
+            "Demande de paiement refusée"
+
+        );
+
+    } catch (err) {
+
+        return error(
+
+            res,
+
+            "Impossible de refuser la demande de paiement.",
+
+            500,
+
+            err.message
+
+        );
+
+    }
+
+}
+
+
+app.patch(
+
+    "/api/admin/demandes-paiement/:id/refuser",
+
+    adminAuth,
+
+    refusePaymentRequest
+
+);
+
+
+/* ============================================================
+   45. PREMIUM MANUEL
+============================================================ */
+
+app.patch(
+
+    "/api/admin/users/:id/premium",
+
+    adminAuth,
+
+    async function(req, res) {
+
+        try {
+
+            const id =
+                parseId(
+                    req.params.id
+                );
+
+
+            if (!id) {
+
+                return error(
+
+                    res,
+
+                    "ID utilisateur invalide.",
+
+                    400
+
+                );
+
+            }
+
+
+            const enabled =
+                req.body.enabled !== undefined
+
+                    ? getBoolean(
+                        req.body.enabled
+                    )
+
+                    : true;
+
+
+            const days =
+                Number(
+
+                    req.body.days ??
+                    req.body.premium_days ??
+                    30
+
+                );
+
+
+            if (
+
+                enabled &&
+
+                (
+
+                    !Number.isInteger(days) ||
+                    days <= 0
+
+                )
+
+            ) {
+
+                return error(
+
+                    res,
+
+                    "Nombre de jours Premium invalide.",
+
+                    400
+
+                );
+
+            }
+
+
+            let premiumUntil =
+                null;
+
+
+            if (enabled) {
+
+                const existing =
+                    await pool.query(
+
+                        `
+                        SELECT premium_until
+
+                        FROM users
+
+                        WHERE id=$1
+                        `,
+
+                        [id]
+
+                    );
+
+
+                if (!existing.rows.length) {
+
+                    return error(
+
+                        res,
+
+                        "Utilisateur introuvable.",
+
+                        404
+
+                    );
+
+                }
+
+
+                const now =
+                    new Date();
+
+
+                let base =
+                    now;
+
+
+                if (
+                    existing.rows[0]
+                        .premium_until
+                ) {
+
+                    const current =
+                        new Date(
+
+                            existing.rows[0]
+                                .premium_until
+
+                        );
+
+
+                    if (
+                        current > now
+                    ) {
+
+                        base =
+                            current;
+
+                    }
+
+                }
+
+
+                premiumUntil =
+                    new Date(base);
+
+
+                premiumUntil.setDate(
+
+                    premiumUntil.getDate() +
+                    days
+
+                );
+
+            }
+
+
+            const result =
+                await pool.query(
+
+                    `
+                    UPDATE users
+
+                    SET
+
+                        premium=$1,
+
+                        is_premium=$1,
+
+                        premium_until=$2,
+
+                        updated_at=
+                            CURRENT_TIMESTAMP
+
+                    WHERE id=$3
+
+                    RETURNING
+
+                        id,
+                        nom,
+                        email,
+                        premium,
+                        is_premium,
+                        premium_until
+                    `,
+
+                    [
+
+                        enabled,
+                        premiumUntil,
+                        id
+
+                    ]
+
+                );
+
+
+            if (!result.rows.length) {
+
+                return error(
+
+                    res,
+
+                    "Utilisateur introuvable.",
+
+                    404
+
+                );
+
+            }
+
+
+            await logActivity(
+
+                enabled
+                    ? "ENABLE_PREMIUM"
+                    : "DISABLE_PREMIUM",
+
+                enabled
+                    ? `Premium activé pour utilisateur ${id} pendant ${days} jours`
+                    : `Premium désactivé pour utilisateur ${id}`,
+
+                id
+
+            );
+
+
+            return success(
+
+                res,
+
+                {
+
+                    ...result.rows[0],
+
+                    premium_days:
+                        enabled
+                            ? days
+                            : 0
+
+                },
+
+                enabled
+                    ? "Premium activé"
+                    : "Premium désactivé"
+
+            );
+
+        } catch (err) {
+
+            return error(
+
+                res,
+
+                "Impossible de modifier Premium.",
+
+                500,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
+/* ============================================================
+   46. STATISTIQUES
 ============================================================ */
 
 async function statistics(req, res) {
@@ -4974,6 +7257,35 @@ async function statistics(req, res) {
                     )::int AS refuses,
 
                     (
+                        SELECT COUNT(*)
+                        FROM demandes_paiement
+                    )::int AS demandes_paiement,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM demandes_paiement
+                        WHERE LOWER(
+                            COALESCE(status,'pending')
+                        )='pending'
+                    )::int AS demandes_en_attente,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM demandes_paiement
+                        WHERE LOWER(
+                            COALESCE(status,'pending')
+                        )='validated'
+                    )::int AS demandes_validees,
+
+                    (
+                        SELECT COUNT(*)
+                        FROM demandes_paiement
+                        WHERE LOWER(
+                            COALESCE(status,'pending')
+                        )='refused'
+                    )::int AS demandes_refusees,
+
+                    (
                         SELECT COALESCE(
                             SUM(amount),
                             0
@@ -4982,6 +7294,7 @@ async function statistics(req, res) {
                         WHERE LOWER(status)
                         = 'validated'
                     ) AS revenus
+
                 `
 
             );
@@ -5030,6 +7343,26 @@ async function statistics(req, res) {
                 refuses:
                     Number(
                         s.refuses
+                    ),
+
+                demandes_paiement:
+                    Number(
+                        s.demandes_paiement
+                    ),
+
+                demandes_en_attente:
+                    Number(
+                        s.demandes_en_attente
+                    ),
+
+                demandes_validees:
+                    Number(
+                        s.demandes_validees
+                    ),
+
+                demandes_refusees:
+                    Number(
+                        s.demandes_refusees
                     ),
 
                 revenus:
@@ -5081,7 +7414,7 @@ app.get(
 
 
 /* ============================================================
-   42. ROUTE 404
+   47. ROUTE 404
 ============================================================ */
 
 app.use(
@@ -5109,7 +7442,7 @@ app.use(
 
 
 /* ============================================================
-   43. GESTIONNAIRE D'ERREURS
+   48. GESTIONNAIRE D'ERREURS
 ============================================================ */
 
 app.use(
@@ -5147,13 +7480,15 @@ app.use(
 
 
 /* ============================================================
-   44. ARRÊT PROPRE
+   49. ARRÊT PROPRE
 ============================================================ */
 
 async function gracefulShutdown(signal) {
 
     console.log(
+
         `${signal} reçu. Arrêt du serveur...`
+
     );
 
 
@@ -5161,18 +7496,26 @@ async function gracefulShutdown(signal) {
 
         await pool.end();
 
+
         console.log(
+
             "Connexion PostgreSQL fermée."
+
         );
+
 
         process.exit(0);
 
     } catch (err) {
 
         console.error(
+
             "Erreur arrêt serveur :",
+
             err
+
         );
+
 
         process.exit(1);
 
@@ -5182,23 +7525,37 @@ async function gracefulShutdown(signal) {
 
 
 process.on(
+
     "SIGTERM",
+
     function() {
-        gracefulShutdown("SIGTERM");
+
+        gracefulShutdown(
+            "SIGTERM"
+        );
+
     }
+
 );
 
 
 process.on(
+
     "SIGINT",
+
     function() {
-        gracefulShutdown("SIGINT");
+
+        gracefulShutdown(
+            "SIGINT"
+        );
+
     }
+
 );
 
 
 /* ============================================================
-   45. DÉMARRAGE SERVEUR
+   50. DÉMARRAGE SERVEUR
 ============================================================ */
 
 async function startServer() {
@@ -5223,27 +7580,27 @@ async function startServer() {
                 );
 
                 console.log(
-                    "        BMJ SERVICE BACKEND"
+                    "          BMJ SERVICE BACKEND"
                 );
 
                 console.log(
-                    "        VERSION : 12.0.0"
+                    "          VERSION : 13.0.0"
                 );
 
                 console.log(
-                    `        PORT : ${PORT}`
+                    `          PORT : ${PORT}`
                 );
 
                 console.log(
-                    "        DATABASE : PostgreSQL"
+                    "          DATABASE : PostgreSQL"
                 );
 
                 console.log(
-                    "        SERVER : Render"
+                    "          SERVER : Render"
                 );
 
                 console.log(
-                    "        STATUS : ONLINE"
+                    "          STATUS : ONLINE"
                 );
 
                 console.log(
@@ -5260,6 +7617,22 @@ async function startServer() {
 
                 console.log(
                     `TOTAL ROUTES : ${ROUTES.length}`
+                );
+
+                console.log(
+                    "=================================================="
+                );
+
+                console.log(
+                    "NOUVELLE FONCTIONNALITÉ :"
+                );
+
+                console.log(
+                    "POST /api/demandes-paiement"
+                );
+
+                console.log(
+                    "TABLE : demandes_paiement"
                 );
 
                 console.log(
