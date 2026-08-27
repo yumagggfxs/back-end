@@ -36,6 +36,26 @@
 
 
 /* ============================================================
+   BMJ SERVICE
+   MODULE POSTGRESQL + DEMANDES DE VÉRIFICATION
+   ============================================================
+
+   IMPORTANT
+   ------------------------------------------------------------
+   CE MODULE NE DÉMARRE PAS LE SERVEUR.
+
+   Il ne contient PAS :
+   - app.listen()
+   - startServer()
+   - process.exit()
+
+   Le démarrage du serveur est effectué dans l'autre partie
+   de ton server.js.
+
+   ============================================================ */
+
+
+/* ============================================================
    1. IMPORTATIONS
 ============================================================ */
 
@@ -47,11 +67,17 @@ const crypto = require("crypto");
 
 /* ============================================================
    2. APPLICATION
+   ------------------------------------------------------------
+   Si ton serveur principal possède déjà "app", ne crée pas
+   une deuxième application Express.
+
+   Dans ce cas, utilise simplement :
+   const app = require("./app");
+
+   ou place directement ce code dans ton server.js principal.
 ============================================================ */
 
 const app = express();
-
-const PORT = process.env.PORT || 10000;
 
 
 /* ============================================================
@@ -80,14 +106,16 @@ const pool = new Pool({
 
 
 /* ============================================================
-   4. ADMINISTRATEUR
+   4. CONFIGURATION ADMINISTRATEUR
 ============================================================ */
 
 const ADMIN_EMAIL =
     "admin@bmjservice.com";
 
+
 const ADMIN_PASSWORD =
     "BMJAdmin@2026";
+
 
 const ADMIN_SECRET =
     "BMJ_SERVICE_ADMIN_SECRET_2026_CHANGE_ME_9X7K2P";
@@ -95,6 +123,9 @@ const ADMIN_SECRET =
 
 /* ============================================================
    5. MIDDLEWARE CORS
+   ------------------------------------------------------------
+   Si ton serveur principal possède déjà ce middleware,
+   ne le déclare qu'une seule fois.
 ============================================================ */
 
 app.use(
@@ -162,7 +193,9 @@ app.use(
     function(req, res, next) {
 
         console.log(
+
             `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
+
         );
 
         next();
@@ -173,7 +206,7 @@ app.use(
 
 
 /* ============================================================
-   8. RÉPONSES STANDARD
+   8. RÉPONSE SUCCESS
 ============================================================ */
 
 function success(
@@ -199,6 +232,10 @@ function success(
 }
 
 
+/* ============================================================
+   9. RÉPONSE ERROR
+============================================================ */
+
 function error(
 
     res,
@@ -213,11 +250,14 @@ function error(
 
     console.error(
 
-        `[BMJ ERROR] ${message}`,
+        "[BMJ ERROR]",
+
+        message,
 
         details || ""
 
     );
+
 
     return res.status(status).json({
 
@@ -235,54 +275,163 @@ function error(
 
 
 /* ============================================================
-   9. OUTILS
+   10. OUTILS
 ============================================================ */
+
+
+/* ------------------------------------------------------------
+   Vérification d'un ID
+------------------------------------------------------------ */
 
 function parseId(value) {
 
-    const id = Number(value);
+    const id =
+        Number(value);
 
-    if (!Number.isInteger(id) || id <= 0) {
+
+    if (
+
+        !Number.isInteger(id) ||
+
+        id <= 0
+
+    ) {
 
         return null;
 
     }
+
 
     return id;
 
 }
 
 
+/* ------------------------------------------------------------
+   Normalisation email
+------------------------------------------------------------ */
+
 function normalizeEmail(email) {
 
     return String(email || "")
+
         .trim()
+
         .toLowerCase();
 
 }
 
 
-function getBoolean(value, defaultValue = false) {
+/* ------------------------------------------------------------
+   Conversion booléenne
+------------------------------------------------------------ */
 
-    if (value === undefined || value === null) {
+function getBoolean(
+
+    value,
+
+    defaultValue = false
+
+) {
+
+    if (
+
+        value === undefined ||
+
+        value === null
+
+    ) {
 
         return defaultValue;
 
     }
 
-    if (typeof value === "boolean") {
+
+    if (
+
+        typeof value === "boolean"
+
+    ) {
 
         return value;
 
     }
 
-    return String(value).toLowerCase() === "true";
+
+    return (
+
+        String(value)
+
+            .trim()
+
+            .toLowerCase() === "true"
+
+    );
 
 }
 
 
 /* ============================================================
-   10. TOKEN ADMIN
+   11. GÉNÉRATION RÉFÉRENCE VÉRIFICATION
+============================================================ */
+
+function generateVerificationReference() {
+
+    const date =
+        new Date();
+
+
+    const year =
+        date.getFullYear();
+
+
+    const month =
+        String(
+
+            date.getMonth() + 1
+
+        ).padStart(2, "0");
+
+
+    const day =
+        String(
+
+            date.getDate()
+
+        ).padStart(2, "0");
+
+
+    const random =
+        crypto
+
+            .randomBytes(4)
+
+            .toString("hex")
+
+            .toUpperCase();
+
+
+    return (
+
+        "BMJ-" +
+
+        year +
+
+        month +
+
+        day +
+
+        "-" +
+
+        random
+
+    );
+
+}
+
+
+/* ============================================================
+   12. TOKEN ADMIN
 ============================================================ */
 
 function generateToken() {
@@ -290,31 +439,59 @@ function generateToken() {
     const timestamp =
         Date.now().toString();
 
+
     const random =
         crypto
+
             .randomBytes(32)
+
             .toString("hex");
 
+
     const payload =
-        timestamp + "." + random;
+        timestamp +
+
+        "." +
+
+        random;
+
 
     const signature =
         crypto
+
             .createHmac(
+
                 "sha256",
+
                 ADMIN_SECRET
+
             )
+
             .update(payload)
+
             .digest("hex");
 
+
     return Buffer
+
         .from(
-            payload + "." + signature
+
+            payload +
+
+            "." +
+
+            signature
+
         )
+
         .toString("base64url");
 
 }
 
+
+/* ============================================================
+   13. VÉRIFICATION TOKEN ADMIN
+============================================================ */
 
 function verifyToken(token) {
 
@@ -326,61 +503,121 @@ function verifyToken(token) {
 
         }
 
+
         const decoded =
             Buffer
+
                 .from(
+
                     token,
+
                     "base64url"
+
                 )
+
                 .toString("utf8");
+
 
         const parts =
             decoded.split(".");
 
-        if (parts.length !== 3) {
-
-            return false;
-
-        }
-
-        const timestamp =
-            parts[0];
-
-        const random =
-            parts[1];
-
-        const signature =
-            parts[2];
-
-        const payload =
-            timestamp + "." + random;
-
-        const expected =
-            crypto
-                .createHmac(
-                    "sha256",
-                    ADMIN_SECRET
-                )
-                .update(payload)
-                .digest("hex");
 
         if (
-            signature.length !==
-            expected.length
+
+            parts.length !== 3
+
         ) {
 
             return false;
 
         }
 
+
+        const timestamp =
+            parts[0];
+
+
+        const random =
+            parts[1];
+
+
+        const signature =
+            parts[2];
+
+
+        if (
+
+            !timestamp ||
+
+            !random ||
+
+            !signature
+
+        ) {
+
+            return false;
+
+        }
+
+
+        const payload =
+            timestamp +
+
+            "." +
+
+            random;
+
+
+        const expected =
+            crypto
+
+                .createHmac(
+
+                    "sha256",
+
+                    ADMIN_SECRET
+
+                )
+
+                .update(payload)
+
+                .digest("hex");
+
+
+        if (
+
+            signature.length !==
+
+            expected.length
+
+        ) {
+
+            return false;
+
+        }
+
+
         const validSignature =
             crypto.timingSafeEqual(
 
-                Buffer.from(signature),
+                Buffer.from(
 
-                Buffer.from(expected)
+                    signature,
+
+                    "utf8"
+
+                ),
+
+                Buffer.from(
+
+                    expected,
+
+                    "utf8"
+
+                )
 
             );
+
 
         if (!validSignature) {
 
@@ -388,35 +625,67 @@ function verifyToken(token) {
 
         }
 
-        /*
-           Expiration du token :
-           24 heures
-        */
 
         const tokenTime =
             Number(timestamp);
 
-        if (!Number.isFinite(tokenTime)) {
-
-            return false;
-
-        }
-
-        const maxAge =
-            24 * 60 * 60 * 1000;
 
         if (
-            Date.now() - tokenTime >
-            maxAge
+
+            !Number.isFinite(tokenTime)
+
         ) {
 
             return false;
 
         }
 
+
+        /* ----------------------------------------------------
+           EXPIRATION
+           24 heures
+        ---------------------------------------------------- */
+
+        const maxAge =
+
+            24 *
+
+            60 *
+
+            60 *
+
+            1000;
+
+
+        const age =
+            Date.now() - tokenTime;
+
+
+        if (
+
+            age < 0 ||
+
+            age > maxAge
+
+        ) {
+
+            return false;
+
+        }
+
+
         return true;
 
+
     } catch (err) {
+
+        console.error(
+
+            "Erreur vérification token :",
+
+            err.message
+
+        );
 
         return false;
 
@@ -426,66 +695,135 @@ function verifyToken(token) {
 
 
 /* ============================================================
-   11. AUTHENTIFICATION ADMIN
+   14. AUTHENTIFICATION ADMIN
 ============================================================ */
 
-function adminAuth(req, res, next) {
+function adminAuth(
 
-    const authorization =
-        req.headers.authorization || "";
+    req,
 
-    let token = "";
+    res,
 
-    if (
-        authorization.startsWith("Bearer ")
-    ) {
+    next
 
-        token =
-            authorization.substring(7).trim();
+) {
 
-    }
+    try {
 
-    /*
-       Compatibilité avec :
-       /api/xxx?token=...
-    */
+        const authorization =
+            req.headers.authorization || "";
 
-    if (!token && req.query.token) {
 
-        token =
-            String(req.query.token);
+        let token = "";
 
-    }
 
-    if (!verifyToken(token)) {
+        /* ----------------------------------------------------
+           Authorization: Bearer TOKEN
+        ---------------------------------------------------- */
+
+        if (
+
+            authorization.startsWith(
+
+                "Bearer "
+
+            )
+
+        ) {
+
+            token =
+
+                authorization
+
+                    .substring(7)
+
+                    .trim();
+
+        }
+
+
+        /* ----------------------------------------------------
+           Compatibilité token query
+           /api/xxx?token=...
+        ---------------------------------------------------- */
+
+        if (
+
+            !token &&
+
+            req.query.token
+
+        ) {
+
+            token =
+
+                String(
+
+                    req.query.token
+
+                ).trim();
+
+        }
+
+
+        /* ----------------------------------------------------
+           Vérification
+        ---------------------------------------------------- */
+
+        if (
+
+            !verifyToken(token)
+
+        ) {
+
+            return error(
+
+                res,
+
+                "Accès administrateur non autorisé.",
+
+                401
+
+            );
+
+        }
+
+
+        req.admin = {
+
+            email:
+                ADMIN_EMAIL,
+
+            role:
+                "administrator"
+
+        };
+
+
+        next();
+
+
+    } catch (err) {
 
         return error(
 
             res,
 
-            "Accès administrateur non autorisé.",
+            "Erreur authentification administrateur.",
 
-            401
+            401,
+
+            err.message
 
         );
 
     }
 
-    req.admin = {
-
-        email: ADMIN_EMAIL,
-
-        role: "administrator"
-
-    };
-
-    next();
-
 }
 
 
 /* ============================================================
-   12. JOURNAL ADMIN
+   15. JOURNAL ADMIN
 ============================================================ */
 
 async function logActivity(
@@ -505,33 +843,66 @@ async function logActivity(
         await pool.query(
 
             `
+
             INSERT INTO admin_activity
+
             (
+
                 action,
+
                 description,
+
                 user_id,
+
                 payment_id,
+
                 admin_email
+
             )
+
             VALUES
-            ($1,$2,$3,$4,$5)
+
+            (
+
+                $1,
+
+                $2,
+
+                $3,
+
+                $4,
+
+                $5
+
+            )
+
             `,
 
             [
+
                 action,
+
                 description,
+
                 userId,
+
                 paymentId,
+
                 ADMIN_EMAIL
+
             ]
 
         );
 
+
     } catch (err) {
 
         console.error(
+
             "Erreur journal admin :",
+
             err.message
+
         );
 
     }
@@ -540,7 +911,14 @@ async function logActivity(
 
 
 /* ============================================================
-   13. INITIALISATION BASE DE DONNÉES
+   16. INITIALISATION BASE DE DONNÉES
+   ------------------------------------------------------------
+   Cette fonction prépare les tables.
+
+   IMPORTANT :
+   Elle est seulement définie ici.
+
+   Elle n'est PAS appelée avec startServer().
 ============================================================ */
 
 async function initDatabase() {
@@ -548,10 +926,13 @@ async function initDatabase() {
     const client =
         await pool.connect();
 
+
     try {
 
         console.log(
+
             "Connexion à PostgreSQL..."
+
         );
 
 
@@ -691,99 +1072,177 @@ async function initDatabase() {
 
 
         /* ====================================================
+           DEMANDES DE VÉRIFICATION
+        ==================================================== */
+
+        await client.query(`
+
+            CREATE TABLE IF NOT EXISTS demandes_verification (
+
+                id SERIAL PRIMARY KEY,
+
+                reference VARCHAR(50)
+                    UNIQUE NOT NULL,
+
+                numero_payeur VARCHAR(100)
+                    NOT NULL,
+
+                user_id INTEGER NULL,
+
+                nom VARCHAR(255) NULL,
+
+                email VARCHAR(255) NULL,
+
+                status VARCHAR(50)
+                    DEFAULT 'pending',
+
+                notes TEXT NULL,
+
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                updated_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                verified_at TIMESTAMP NULL
+
+            );
+
+        `);
+
+
+        /* ====================================================
            MIGRATIONS USERS
         ==================================================== */
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS nom VARCHAR(255);
+
+            ADD COLUMN IF NOT EXISTS
+            nom VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+
+            ADD COLUMN IF NOT EXISTS
+            email VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS telephone VARCHAR(100);
+
+            ADD COLUMN IF NOT EXISTS
+            telephone VARCHAR(100);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS domaine VARCHAR(255);
+
+            ADD COLUMN IF NOT EXISTS
+            domaine VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS password TEXT;
+
+            ADD COLUMN IF NOT EXISTS
+            password TEXT;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS photo TEXT;
+
+            ADD COLUMN IF NOT EXISTS
+            photo TEXT;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS premium BOOLEAN DEFAULT FALSE;
+
+            ADD COLUMN IF NOT EXISTS
+            premium BOOLEAN DEFAULT FALSE;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE;
+
+            ADD COLUMN IF NOT EXISTS
+            is_premium BOOLEAN DEFAULT FALSE;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS premium_until TIMESTAMP NULL;
+
+            ADD COLUMN IF NOT EXISTS
+            premium_until TIMESTAMP NULL;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT FALSE;
+
+            ADD COLUMN IF NOT EXISTS
+            blocked BOOLEAN DEFAULT FALSE;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE;
+
+            ADD COLUMN IF NOT EXISTS
+            is_blocked BOOLEAN DEFAULT FALSE;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS created_at
-            TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+            ADD COLUMN IF NOT EXISTS
+            created_at TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS updated_at
-            TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+            ADD COLUMN IF NOT EXISTS
+            updated_at TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP;
 
         `);
 
@@ -795,162 +1254,222 @@ async function initDatabase() {
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+
+            ADD COLUMN IF NOT EXISTS
+            user_id INTEGER NULL;
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS nom VARCHAR(255);
+
+            ADD COLUMN IF NOT EXISTS
+            nom VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+
+            ADD COLUMN IF NOT EXISTS
+            email VARCHAR(255);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS telephone VARCHAR(100);
+
+            ADD COLUMN IF NOT EXISTS
+            telephone VARCHAR(100);
 
         `);
+
 
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS amount NUMERIC(15,2)
+
+            ADD COLUMN IF NOT EXISTS
+            amount NUMERIC(15,2)
             DEFAULT 0;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS montant NUMERIC(15,2)
+
+            ADD COLUMN IF NOT EXISTS
+            montant NUMERIC(15,2)
             DEFAULT 0;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS currency VARCHAR(20)
+
+            ADD COLUMN IF NOT EXISTS
+            currency VARCHAR(20)
             DEFAULT 'USD';
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS methode VARCHAR(100);
+
+            ADD COLUMN IF NOT EXISTS
+            methode VARCHAR(100);
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS method VARCHAR(100);
+
+            ADD COLUMN IF NOT EXISTS
+            method VARCHAR(100);
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS reference VARCHAR(255);
+
+            ADD COLUMN IF NOT EXISTS
+            reference VARCHAR(255);
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(255);
+
+            ADD COLUMN IF NOT EXISTS
+            transaction_id VARCHAR(255);
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS preuve TEXT;
+
+            ADD COLUMN IF NOT EXISTS
+            preuve TEXT;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS proof TEXT;
+
+            ADD COLUMN IF NOT EXISTS
+            proof TEXT;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS status VARCHAR(50)
+
+            ADD COLUMN IF NOT EXISTS
+            status VARCHAR(50)
             DEFAULT 'pending';
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS premium_days INTEGER
+
+            ADD COLUMN IF NOT EXISTS
+            premium_days INTEGER
             DEFAULT 30;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS notes TEXT;
+
+            ADD COLUMN IF NOT EXISTS
+            notes TEXT;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS refusal_reason TEXT;
+
+            ADD COLUMN IF NOT EXISTS
+            refusal_reason TEXT;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS created_at
-            TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+            ADD COLUMN IF NOT EXISTS
+            created_at TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS validated_at
-            TIMESTAMP NULL;
+
+            ADD COLUMN IF NOT EXISTS
+            validated_at TIMESTAMP NULL;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS refused_at
-            TIMESTAMP NULL;
+
+            ADD COLUMN IF NOT EXISTS
+            refused_at TIMESTAMP NULL;
 
         `);
 
+
         await client.query(`
 
             ALTER TABLE paiements
-            ADD COLUMN IF NOT EXISTS updated_at
-            TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+            ADD COLUMN IF NOT EXISTS
+            updated_at TIMESTAMP
+            DEFAULT CURRENT_TIMESTAMP;
 
         `);
 
 
         /* ====================================================
-           INDEX
+           INDEX USERS
         ==================================================== */
 
         await client.query(`
@@ -980,6 +1499,10 @@ async function initDatabase() {
         `);
 
 
+        /* ====================================================
+           INDEX PAIEMENTS
+        ==================================================== */
+
         await client.query(`
 
             CREATE INDEX IF NOT EXISTS
@@ -1007,18 +1530,68 @@ async function initDatabase() {
         `);
 
 
+        /* ====================================================
+           INDEX DEMANDES
+        ==================================================== */
+
+        await client.query(`
+
+            CREATE INDEX IF NOT EXISTS
+            idx_demandes_verification_reference
+            ON demandes_verification(reference);
+
+        `);
+
+
+        await client.query(`
+
+            CREATE INDEX IF NOT EXISTS
+            idx_demandes_verification_numero
+            ON demandes_verification(numero_payeur);
+
+        `);
+
+
+        await client.query(`
+
+            CREATE INDEX IF NOT EXISTS
+            idx_demandes_verification_status
+            ON demandes_verification(status);
+
+        `);
+
+
+        await client.query(`
+
+            CREATE INDEX IF NOT EXISTS
+            idx_demandes_verification_created
+            ON demandes_verification(created_at);
+
+        `);
+
+
         console.log(
+
             "Base PostgreSQL prête."
+
         );
+
+
+        return true;
+
 
     } catch (err) {
 
         console.error(
+
             "Erreur initialisation PostgreSQL :",
+
             err
+
         );
 
         throw err;
+
 
     } finally {
 
@@ -1030,70 +1603,1167 @@ async function initDatabase() {
 
 
 /* ============================================================
-   14. ROUTE /
+   17. ROUTE RACINE
 ============================================================ */
 
-app.get("/", function(req, res) {
+app.get(
 
-    res.json({
+    "/",
 
-        success: true,
+    function(req, res) {
 
-        service:
-            "BMJ SERVICE BACKEND",
+        return res.json({
 
-        version:
-            "12.0.0",
+            success: true,
 
-        status:
-            "online",
+            service:
+                "BMJ SERVICE BACKEND",
 
-        database:
-            "PostgreSQL",
+            version:
+                "12.0.0",
 
-        server:
-            "Render",
+            status:
+                "online",
 
-        time:
-            new Date().toISOString()
+            database:
+                "PostgreSQL",
 
-    });
+            server:
+                "Render",
 
-});
+            time:
+                new Date().toISOString()
+
+        });
+
+    }
+
+);
 
 
 /* ============================================================
-   15. ROUTE /api
+   18. ROUTE API
 ============================================================ */
 
-app.get("/api", function(req, res) {
+app.get(
 
-    success(
+    "/api",
 
-        res,
+    function(req, res) {
 
-        {
+        return success(
 
-            version: "12.0.0",
+            res,
 
-            status: "online",
+            {
 
-            service: "BMJ SERVICE API"
+                version:
+                    "12.0.0",
 
-        },
+                status:
+                    "online",
 
-        "API BMJ SERVICE opérationnelle"
+                service:
+                    "BMJ SERVICE API"
 
-    );
+            },
 
-});
+            "API BMJ SERVICE opérationnelle"
+
+        );
+
+    }
+
+);
 
 
 /* ============================================================
-   16. ROUTES DISPONIBLES
+   19. TEST POSTGRESQL
+============================================================ */
+
+app.get(
+
+    "/api/test-db",
+
+    async function(req, res) {
+
+        try {
+
+            const result =
+
+                await pool.query(
+
+                    "SELECT NOW() AS time"
+
+                );
+
+
+            return success(
+
+                res,
+
+                {
+
+                    database:
+                        "PostgreSQL",
+
+                    connected:
+                        true,
+
+                    time:
+                        result.rows[0].time
+
+                },
+
+                "Connexion PostgreSQL fonctionnelle."
+
+            );
+
+
+        } catch (err) {
+
+            return error(
+
+                res,
+
+                "Erreur connexion PostgreSQL.",
+
+                500,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
+/* ============================================================
+   20. HEALTH CHECK
+============================================================ */
+
+app.get(
+
+    "/api/health",
+
+    async function(req, res) {
+
+        try {
+
+            const result =
+
+                await pool.query(
+
+                    "SELECT NOW() AS database_time"
+
+                );
+
+
+            return success(
+
+                res,
+
+                {
+
+                    server:
+                        "online",
+
+                    database:
+                        "connected",
+
+                    database_time:
+                        result.rows[0].database_time,
+
+                    time:
+                        new Date().toISOString()
+
+                },
+
+                "Serveur BMJ SERVICE opérationnel."
+
+            );
+
+
+        } catch (err) {
+
+            return error(
+
+                res,
+
+                "Base de données indisponible.",
+
+                503,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
+/* ============================================================
+   21. CRÉER UNE DEMANDE DE VÉRIFICATION
+============================================================ */
+
+app.post(
+
+    "/api/demandes-verification",
+
+    async function(req, res) {
+
+        try {
+
+            /* ------------------------------------------------
+               NUMÉRO PAYEUR
+            ------------------------------------------------ */
+
+            const numeroPayeur =
+
+                String(
+
+                    req.body.numero_payeur ||
+
+                    req.body.numero ||
+
+                    req.body.telephone ||
+
+                    ""
+
+                )
+
+                .trim();
+
+
+            /* ------------------------------------------------
+               USER ID
+            ------------------------------------------------ */
+
+            let userId = null;
+
+
+            if (req.body.user_id) {
+
+                userId =
+
+                    parseId(
+
+                        req.body.user_id
+
+                    );
+
+            }
+
+
+            /* ------------------------------------------------
+               NOM
+            ------------------------------------------------ */
+
+            const nom =
+
+                String(
+
+                    req.body.nom || ""
+
+                )
+
+                .trim();
+
+
+            /* ------------------------------------------------
+               EMAIL
+            ------------------------------------------------ */
+
+            const email =
+
+                normalizeEmail(
+
+                    req.body.email || ""
+
+                );
+
+
+            /* ------------------------------------------------
+               VALIDATION NUMÉRO
+            ------------------------------------------------ */
+
+            if (!numeroPayeur) {
+
+                return error(
+
+                    res,
+
+                    "Le numéro ayant effectué le paiement est obligatoire.",
+
+                    400
+
+                );
+
+            }
+
+
+            if (
+
+                numeroPayeur.length < 6
+
+            ) {
+
+                return error(
+
+                    res,
+
+                    "Le numéro ayant effectué le paiement est invalide.",
+
+                    400
+
+                );
+
+            }
+
+
+            /* ------------------------------------------------
+               GÉNÉRATION RÉFÉRENCE
+            ------------------------------------------------ */
+
+            let reference = "";
+
+            let result = null;
+
+            let inserted = false;
+
+
+            /* ------------------------------------------------
+               5 TENTATIVES MAXIMUM
+            ------------------------------------------------ */
+
+            for (
+
+                let attempt = 0;
+
+                attempt < 5 && !inserted;
+
+                attempt++
+
+            ) {
+
+                reference =
+
+                    generateVerificationReference();
+
+
+                try {
+
+                    result =
+
+                        await pool.query(
+
+                            `
+
+                            INSERT INTO
+                            demandes_verification
+
+                            (
+
+                                reference,
+
+                                numero_payeur,
+
+                                user_id,
+
+                                nom,
+
+                                email,
+
+                                status
+
+                            )
+
+                            VALUES
+
+                            (
+
+                                $1,
+
+                                $2,
+
+                                $3,
+
+                                $4,
+
+                                $5,
+
+                                'pending'
+
+                            )
+
+                            RETURNING
+
+                                id,
+
+                                reference,
+
+                                numero_payeur,
+
+                                user_id,
+
+                                nom,
+
+                                email,
+
+                                status,
+
+                                created_at
+
+                            `,
+
+                            [
+
+                                reference,
+
+                                numeroPayeur,
+
+                                userId,
+
+                                nom || null,
+
+                                email || null
+
+                            ]
+
+                        );
+
+
+                    inserted = true;
+
+
+                } catch (insertError) {
+
+                    /* ----------------------------------------
+                       Collision référence uniquement
+                    ---------------------------------------- */
+
+                    if (
+
+                        insertError.code !==
+
+                        "23505"
+
+                    ) {
+
+                        throw insertError;
+
+                    }
+
+                }
+
+            }
+
+
+            /* ------------------------------------------------
+               INSERTION IMPOSSIBLE
+            ------------------------------------------------ */
+
+            if (
+
+                !inserted ||
+
+                !result ||
+
+                !result.rows.length
+
+            ) {
+
+                return error(
+
+                    res,
+
+                    "Impossible de générer une référence unique.",
+
+                    500
+
+                );
+
+            }
+
+
+            const demande =
+                result.rows[0];
+
+
+            console.log(
+
+                `[BMJ VERIFICATION] Nouvelle demande : ${demande.reference}`
+
+            );
+
+
+            /* ------------------------------------------------
+               RÉPONSE
+            ------------------------------------------------ */
+
+            return success(
+
+                res,
+
+                {
+
+                    id:
+                        demande.id,
+
+                    reference:
+                        demande.reference,
+
+                    numero_payeur:
+                        demande.numero_payeur,
+
+                    status:
+                        demande.status,
+
+                    created_at:
+                        demande.created_at
+
+                },
+
+                "Demande de vérification enregistrée avec succès."
+
+            );
+
+
+        } catch (err) {
+
+            console.error(
+
+                "Erreur création demande vérification :",
+
+                err
+
+            );
+
+
+            return error(
+
+                res,
+
+                "Impossible d'enregistrer la demande de vérification dans le serveur.",
+
+                500,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
+/* ============================================================
+   22. ADMIN
+   LISTE DES DEMANDES
+============================================================ */
+
+app.get(
+
+    "/api/admin/demandes-verification",
+
+    adminAuth,
+
+    async function(req, res) {
+
+        try {
+
+            const result =
+
+                await pool.query(`
+
+                    SELECT
+
+                        id,
+
+                        reference,
+
+                        numero_payeur,
+
+                        user_id,
+
+                        nom,
+
+                        email,
+
+                        status,
+
+                        notes,
+
+                        created_at,
+
+                        updated_at,
+
+                        verified_at
+
+                    FROM
+                        demandes_verification
+
+                    ORDER BY
+                        created_at DESC
+
+                `);
+
+
+            return success(
+
+                res,
+
+                result.rows,
+
+                "Demandes de vérification récupérées."
+
+            );
+
+
+        } catch (err) {
+
+            console.error(
+
+                "Erreur récupération demandes :",
+
+                err
+
+            );
+
+
+            return error(
+
+                res,
+
+                "Impossible de récupérer les demandes de vérification.",
+
+                500,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
+/* ============================================================
+   23. ADMIN
+   UNE DEMANDE
+============================================================ */
+
+app.get(
+
+    "/api/admin/demandes-verification/:id",
+
+    adminAuth,
+
+    async function(req, res) {
+
+        try {
+
+            const id =
+
+                parseId(
+
+                    req.params.id
+
+                );
+
+
+            if (!id) {
+
+                return error(
+
+                    res,
+
+                    "Identifiant de demande invalide.",
+
+                    400
+
+                );
+
+            }
+
+
+            const result =
+
+                await pool.query(
+
+                    `
+
+                    SELECT
+
+                        id,
+
+                        reference,
+
+                        numero_payeur,
+
+                        user_id,
+
+                        nom,
+
+                        email,
+
+                        status,
+
+                        notes,
+
+                        created_at,
+
+                        updated_at,
+
+                        verified_at
+
+                    FROM
+                        demandes_verification
+
+                    WHERE
+                        id = $1
+
+                    LIMIT 1
+
+                    `,
+
+                    [id]
+
+                );
+
+
+            if (
+
+                result.rows.length === 0
+
+            ) {
+
+                return error(
+
+                    res,
+
+                    "Demande de vérification introuvable.",
+
+                    404
+
+                );
+
+            }
+
+
+            return success(
+
+                res,
+
+                result.rows[0],
+
+                "Demande de vérification récupérée."
+
+            );
+
+
+        } catch (err) {
+
+            console.error(
+
+                "Erreur récupération demande :",
+
+                err
+
+            );
+
+
+            return error(
+
+                res,
+
+                "Impossible de récupérer la demande.",
+
+                500,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
+/* ============================================================
+   24. ADMIN
+   VALIDER UNE DEMANDE
+============================================================ */
+
+app.patch(
+
+    "/api/admin/demandes-verification/:id/valider",
+
+    adminAuth,
+
+    async function(req, res) {
+
+        try {
+
+            const id =
+
+                parseId(
+
+                    req.params.id
+
+                );
+
+
+            if (!id) {
+
+                return error(
+
+                    res,
+
+                    "Identifiant de demande invalide.",
+
+                    400
+
+                );
+
+            }
+
+
+            const result =
+
+                await pool.query(
+
+                    `
+
+                    UPDATE
+                        demandes_verification
+
+                    SET
+
+                        status = 'verified',
+
+                        verified_at =
+                            CURRENT_TIMESTAMP,
+
+                        updated_at =
+                            CURRENT_TIMESTAMP
+
+                    WHERE
+                        id = $1
+
+                    RETURNING
+
+                        id,
+
+                        reference,
+
+                        numero_payeur,
+
+                        user_id,
+
+                        nom,
+
+                        email,
+
+                        status,
+
+                        verified_at,
+
+                        updated_at
+
+                    `,
+
+                    [id]
+
+                );
+
+
+            if (
+
+                result.rows.length === 0
+
+            ) {
+
+                return error(
+
+                    res,
+
+                    "Demande de vérification introuvable.",
+
+                    404
+
+                );
+
+            }
+
+
+            const demande =
+                result.rows[0];
+
+
+            await logActivity(
+
+                "VERIFICATION_PAIEMENT",
+
+                `Demande de vérification validée : ${demande.reference}`,
+
+                demande.user_id || null,
+
+                null
+
+            );
+
+
+            return success(
+
+                res,
+
+                demande,
+
+                "Demande de vérification validée."
+
+            );
+
+
+        } catch (err) {
+
+            console.error(
+
+                "Erreur validation demande :",
+
+                err
+
+            );
+
+
+            return error(
+
+                res,
+
+                "Impossible de valider la demande.",
+
+                500,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
+/* ============================================================
+   25. ADMIN
+   REFUSER UNE DEMANDE
+   ------------------------------------------------------------
+   Cette route est utile pour que l'administration puisse
+   également traiter les demandes invalides.
+============================================================ */
+
+app.patch(
+
+    "/api/admin/demandes-verification/:id/refuser",
+
+    adminAuth,
+
+    async function(req, res) {
+
+        try {
+
+            const id =
+
+                parseId(
+
+                    req.params.id
+
+                );
+
+
+            if (!id) {
+
+                return error(
+
+                    res,
+
+                    "Identifiant de demande invalide.",
+
+                    400
+
+                );
+
+            }
+
+
+            const notes =
+
+                String(
+
+                    req.body.notes ||
+
+                    req.body.reason ||
+
+                    ""
+
+                )
+
+                .trim();
+
+
+            const result =
+
+                await pool.query(
+
+                    `
+
+                    UPDATE
+                        demandes_verification
+
+                    SET
+
+                        status = 'refused',
+
+                        notes = $2,
+
+                        updated_at =
+                            CURRENT_TIMESTAMP
+
+                    WHERE
+                        id = $1
+
+                    RETURNING
+
+                        id,
+
+                        reference,
+
+                        numero_payeur,
+
+                        user_id,
+
+                        nom,
+
+                        email,
+
+                        status,
+
+                        notes,
+
+                        updated_at
+
+                    `,
+
+                    [
+
+                        id,
+
+                        notes || null
+
+                    ]
+
+                );
+
+
+            if (
+
+                result.rows.length === 0
+
+            ) {
+
+                return error(
+
+                    res,
+
+                    "Demande de vérification introuvable.",
+
+                    404
+
+                );
+
+            }
+
+
+            const demande =
+                result.rows[0];
+
+
+            await logActivity(
+
+                "REFUS_VERIFICATION_PAIEMENT",
+
+                `Demande de vérification refusée : ${demande.reference}`,
+
+                demande.user_id || null,
+
+                null
+
+            );
+
+
+            return success(
+
+                res,
+
+                demande,
+
+                "Demande de vérification refusée."
+
+            );
+
+
+        } catch (err) {
+
+            console.error(
+
+                "Erreur refus demande :",
+
+                err
+
+            );
+
+
+            return error(
+
+                res,
+
+                "Impossible de refuser la demande.",
+
+                500,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
+/* ============================================================
+   26. LISTE DES ROUTES
 ============================================================ */
 
 const ROUTES = [
+
+    /* --------------------------------------------------------
+       SYSTÈME
+    -------------------------------------------------------- */
 
     {
         method: "GET",
@@ -1121,6 +2791,10 @@ const ROUTES = [
     },
 
 
+    /* --------------------------------------------------------
+       UTILISATEURS
+    -------------------------------------------------------- */
+
     {
         method: "POST",
         path: "/api/inscription"
@@ -1135,7 +2809,6 @@ const ROUTES = [
         method: "POST",
         path: "/api/signup"
     },
-
 
     {
         method: "POST",
@@ -1152,6 +2825,10 @@ const ROUTES = [
         path: "/api/signin"
     },
 
+
+    /* --------------------------------------------------------
+       ADMIN
+    -------------------------------------------------------- */
 
     {
         method: "POST",
@@ -1209,6 +2886,10 @@ const ROUTES = [
     },
 
 
+    /* --------------------------------------------------------
+       UTILISATEURS API
+    -------------------------------------------------------- */
+
     {
         method: "GET",
         path: "/api/utilisateurs"
@@ -1239,7 +2920,6 @@ const ROUTES = [
         path: "/api/utilisateurs/:id"
     },
 
-
     {
         method: "GET",
         path: "/api/users"
@@ -1255,6 +2935,10 @@ const ROUTES = [
         path: "/api/users"
     },
 
+
+    /* --------------------------------------------------------
+       PAIEMENTS
+    -------------------------------------------------------- */
 
     {
         method: "GET",
@@ -1317,6 +3001,10 @@ const ROUTES = [
     },
 
 
+    /* --------------------------------------------------------
+       PREMIUM
+    -------------------------------------------------------- */
+
     {
         method: "PATCH",
         path: "/api/admin/users/:id/premium"
@@ -1328,6 +3016,40 @@ const ROUTES = [
     },
 
 
+    /* --------------------------------------------------------
+       DEMANDES DE VÉRIFICATION
+    -------------------------------------------------------- */
+
+    {
+        method: "POST",
+        path: "/api/demandes-verification"
+    },
+
+    {
+        method: "GET",
+        path: "/api/admin/demandes-verification"
+    },
+
+    {
+        method: "GET",
+        path: "/api/admin/demandes-verification/:id"
+    },
+
+    {
+        method: "PATCH",
+        path: "/api/admin/demandes-verification/:id/valider"
+    },
+
+    {
+        method: "PATCH",
+        path: "/api/admin/demandes-verification/:id/refuser"
+    },
+
+
+    /* --------------------------------------------------------
+       STATISTIQUES
+    -------------------------------------------------------- */
+
     {
         method: "GET",
         path: "/api/statistiques"
@@ -1336,17 +3058,24 @@ const ROUTES = [
 ];
 
 
+/* ============================================================
+   27. ROUTE /api/routes
+============================================================ */
+
 app.get(
+
     "/api/routes",
+
     function(req, res) {
 
-        success(
+        return success(
 
             res,
 
             {
 
-                version: "12.0.0",
+                version:
+                    "12.0.0",
 
                 total:
                     ROUTES.length,
@@ -1361,110 +3090,66 @@ app.get(
         );
 
     }
+
 );
 
 
 /* ============================================================
-   17. HEALTH
+   28. EXPORTS
+   ------------------------------------------------------------
+   IMPORTANT :
+   AUCUN démarrage du serveur ici.
 ============================================================ */
 
-app.get(
-    "/api/health",
-    async function(req, res) {
+module.exports = {
 
-        try {
+    app,
 
-            const result =
-                await pool.query(
-                    "SELECT NOW() AS database_time"
-                );
+    pool,
 
-            success(
+    initDatabase,
 
-                res,
+    success,
 
-                {
+    error,
 
-                    server: "online",
+    parseId,
 
-                    database: "connected",
+    normalizeEmail,
 
-                    database_time:
-                        result.rows[0].database_time,
+    getBoolean,
 
-                    time:
-                        new Date().toISOString()
+    generateVerificationReference,
 
-                },
+    generateToken,
 
-                "Serveur opérationnel"
+    verifyToken,
 
-            );
+    adminAuth,
 
-        } catch (err) {
+    logActivity,
 
-            return error(
+    ROUTES
 
-                res,
-
-                "Base de données indisponible.",
-
-                503,
-
-                err.message
-
-            );
-
-        }
-
-    }
-);
+};
 
 
 /* ============================================================
-   18. TEST DATABASE
+   FIN DU MODULE
+   ------------------------------------------------------------
+   PAS DE :
+
+   app.listen(...)
+
+   PAS DE :
+
+   startServer()
+
+   PAS DE :
+
+   process.exit()
+
 ============================================================ */
-
-app.get(
-    "/api/test-db",
-    async function(req, res) {
-
-        try {
-
-            const result =
-                await pool.query(
-                    "SELECT NOW() AS date"
-                );
-
-            success(
-
-                res,
-
-                result.rows[0],
-
-                "Connexion PostgreSQL réussie"
-
-            );
-
-        } catch (err) {
-
-            error(
-
-                res,
-
-                "Connexion PostgreSQL échouée.",
-
-                500,
-
-                err.message
-
-            );
-
-        }
-
-    }
-);
-
 
 /* ============================================================
    19. INSCRIPTION
