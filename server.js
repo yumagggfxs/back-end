@@ -1500,10 +1500,6 @@ app.get(
 
 const ROUTES = [
 
-    /* --------------------------------------------------------
-       SYSTEME
-    -------------------------------------------------------- */
-
     {
         method: "GET",
         path: "/"
@@ -1530,9 +1526,7 @@ const ROUTES = [
     },
 
 
-    /* --------------------------------------------------------
-       UTILISATEURS
-    -------------------------------------------------------- */
+    /* UTILISATEURS */
 
     {
         method: "POST",
@@ -1565,9 +1559,7 @@ const ROUTES = [
     },
 
 
-    /* --------------------------------------------------------
-       ADMIN
-    -------------------------------------------------------- */
+    /* ADMIN */
 
     {
         method: "POST",
@@ -1625,9 +1617,7 @@ const ROUTES = [
     },
 
 
-    /* --------------------------------------------------------
-       UTILISATEURS — CRUD
-    -------------------------------------------------------- */
+    /* UTILISATEURS */
 
     {
         method: "GET",
@@ -1675,9 +1665,7 @@ const ROUTES = [
     },
 
 
-    /* --------------------------------------------------------
-       PAIEMENTS
-    -------------------------------------------------------- */
+    /* PAIEMENTS EXISTANTS */
 
     {
         method: "GET",
@@ -1740,20 +1728,12 @@ const ROUTES = [
     },
 
 
-    /* ========================================================
-       PREMIUM
-       ACTIVER + RETIRER
-    ======================================================== */
+    /* PREMIUM */
 
     {
         method: "PATCH",
         path: "/api/admin/users/:id/premium"
     },
-
-
-    /* --------------------------------------------------------
-       BLOCAGE UTILISATEUR
-    -------------------------------------------------------- */
 
     {
         method: "PATCH",
@@ -1761,9 +1741,7 @@ const ROUTES = [
     },
 
 
-    /* --------------------------------------------------------
-       DEMANDES DE PAIEMENT
-    -------------------------------------------------------- */
+    /* NOUVELLES DEMANDES DE PAIEMENT */
 
     {
         method: "POST",
@@ -1801,9 +1779,7 @@ const ROUTES = [
     },
 
 
-    /* --------------------------------------------------------
-       STATISTIQUES
-    -------------------------------------------------------- */
+    /* STATISTIQUES */
 
     {
         method: "GET",
@@ -1813,30 +1789,35 @@ const ROUTES = [
 ];
 
 
-/* ============================================================
-   LISTE DES ROUTES
-============================================================ */
-
 app.get(
-    "/api/routes",
-    function (req, res) {
 
-        return success(
+    "/api/routes",
+
+    function(req, res) {
+
+        success(
+
             res,
+
             {
-                version: "13.0.0",
+
+                version:
+                    "13.0.0",
 
                 total:
                     ROUTES.length,
 
                 routes:
                     ROUTES
+
             },
 
             "Liste complète des routes BMJ SERVICE"
+
         );
 
     }
+
 );
 
 
@@ -6935,101 +6916,229 @@ app.patch(
 
 
 /* ============================================================
-   45. PREMIUM MANUEL
+   45. GESTION PREMIUM MANUELLE PAR ADMIN
 ============================================================ */
 
 app.patch(
-
     "/api/admin/users/:id/premium",
-
     adminAuth,
-
-    async function(req, res) {
+    async function (req, res) {
 
         try {
 
-            const id =
-                parseId(
-                    req.params.id
-                );
+            /* ====================================================
+               ID UTILISATEUR
+            ==================================================== */
 
+            const id = parseId(
+                req.params.id
+            );
 
             if (!id) {
 
                 return error(
-
                     res,
-
                     "ID utilisateur invalide.",
-
                     400
-
                 );
 
             }
 
 
-            const enabled =
-                req.body.enabled !== undefined
+            /* ====================================================
+               LECTURE DE LA DEMANDE
+            ==================================================== */
 
-                    ? getBoolean(
-                        req.body.enabled
-                    )
-
-                    : true;
+            const body = req.body || {};
 
 
-            const days =
-                Number(
+            /*
+               Le frontend doit envoyer :
 
-                    req.body.days ??
-                    req.body.premium_days ??
-                    30
+               {
+                   enabled: true
+               }
 
-                );
+               ou
+
+               {
+                   enabled: false
+               }
+
+               On accepte aussi quelques anciennes formes
+               pour éviter les problèmes de compatibilité.
+            */
+
+            let enabled;
+
+
+            if (body.enabled !== undefined) {
+
+                if (
+                    body.enabled === true ||
+                    body.enabled === 1 ||
+                    body.enabled === "1" ||
+                    String(body.enabled).toLowerCase() === "true"
+                ) {
+
+                    enabled = true;
+
+                } else {
+
+                    enabled = false;
+
+                }
+
+            }
+
+            else if (body.premium !== undefined) {
+
+                if (
+                    body.premium === true ||
+                    body.premium === 1 ||
+                    body.premium === "1" ||
+                    String(body.premium).toLowerCase() === "true"
+                ) {
+
+                    enabled = true;
+
+                } else {
+
+                    enabled = false;
+
+                }
+
+            }
+
+            else if (body.is_premium !== undefined) {
+
+                if (
+                    body.is_premium === true ||
+                    body.is_premium === 1 ||
+                    body.is_premium === "1" ||
+                    String(body.is_premium).toLowerCase() === "true"
+                ) {
+
+                    enabled = true;
+
+                } else {
+
+                    enabled = false;
+
+                }
+
+            }
+
+            else {
+
+                /*
+                   Si aucun état n'est envoyé,
+                   on considère l'action comme une activation.
+                */
+
+                enabled = true;
+
+            }
+
+
+            /* ====================================================
+               DURÉE PREMIUM
+            ==================================================== */
+
+            let days = Number(
+                body.days ??
+                body.premium_days ??
+                30
+            );
 
 
             if (
-
                 enabled &&
-
                 (
-
                     !Number.isInteger(days) ||
-                    days <= 0
-
+                    days <= 0 ||
+                    days > 3650
                 )
-
             ) {
 
                 return error(
-
                     res,
-
                     "Nombre de jours Premium invalide.",
-
                     400
-
                 );
 
             }
 
 
-            let premiumUntil =
-                null;
+            /* ====================================================
+               VÉRIFICATION UTILISATEUR
+            ==================================================== */
+
+            const userResult =
+                await pool.query(
+
+                    `
+                    SELECT
+                        id,
+                        nom,
+                        email,
+                        premium,
+                        is_premium,
+                        premium_until,
+                        blocked,
+                        is_blocked
+                    FROM users
+                    WHERE id=$1
+                    LIMIT 1
+                    `,
+
+                    [id]
+
+                );
 
 
-            if (enabled) {
+            if (!userResult.rows.length) {
 
-                const existing =
+                return error(
+                    res,
+                    "Utilisateur introuvable.",
+                    404
+                );
+
+            }
+
+
+            const user =
+                userResult.rows[0];
+
+
+            /* ====================================================
+               RETRAIT PREMIUM
+            ==================================================== */
+
+            if (!enabled) {
+
+                const result =
                     await pool.query(
 
                         `
-                        SELECT premium_until
+                        UPDATE users
 
-                        FROM users
+                        SET
+                            premium=false,
+                            is_premium=false,
+                            premium_until=NULL,
+                            updated_at=CURRENT_TIMESTAMP
 
                         WHERE id=$1
+
+                        RETURNING
+                            id,
+                            nom,
+                            email,
+                            premium,
+                            is_premium,
+                            premium_until
                         `,
 
                         [id]
@@ -7037,68 +7146,88 @@ app.patch(
                     );
 
 
-                if (!existing.rows.length) {
+                if (!result.rows.length) {
 
                     return error(
-
                         res,
-
                         "Utilisateur introuvable.",
-
                         404
-
                     );
 
                 }
 
 
-                const now =
-                    new Date();
+                await logActivity(
+
+                    "DISABLE_PREMIUM",
+
+                    `Premium désactivé pour l'utilisateur ${id}`,
+
+                    id
+
+                );
 
 
-                let base =
-                    now;
+                return success(
 
+                    res,
 
-                if (
-                    existing.rows[0]
-                        .premium_until
-                ) {
+                    {
+                        ...result.rows[0],
+                        premium_days: 0
+                    },
 
-                    const current =
-                        new Date(
-
-                            existing.rows[0]
-                                .premium_until
-
-                        );
-
-
-                    if (
-                        current > now
-                    ) {
-
-                        base =
-                            current;
-
-                    }
-
-                }
-
-
-                premiumUntil =
-                    new Date(base);
-
-
-                premiumUntil.setDate(
-
-                    premiumUntil.getDate() +
-                    days
+                    "Le statut Premium a été retiré."
 
                 );
 
             }
 
+
+            /* ====================================================
+               ACTIVATION PREMIUM
+            ==================================================== */
+
+            const now =
+                new Date();
+
+            let baseDate =
+                now;
+
+
+            if (user.premium_until) {
+
+                const currentUntil =
+                    new Date(
+                        user.premium_until
+                    );
+
+
+                if (
+                    !isNaN(currentUntil.getTime()) &&
+                    currentUntil > now
+                ) {
+
+                    baseDate =
+                        currentUntil;
+
+                }
+
+            }
+
+
+            const premiumUntil =
+                new Date(baseDate);
+
+
+            premiumUntil.setDate(
+                premiumUntil.getDate() + days
+            );
+
+
+            /* ====================================================
+               ACTIVATION
+            ==================================================== */
 
             const result =
                 await pool.query(
@@ -7107,20 +7236,14 @@ app.patch(
                     UPDATE users
 
                     SET
+                        premium=true,
+                        is_premium=true,
+                        premium_until=$1,
+                        updated_at=CURRENT_TIMESTAMP
 
-                        premium=$1,
-
-                        is_premium=$1,
-
-                        premium_until=$2,
-
-                        updated_at=
-                            CURRENT_TIMESTAMP
-
-                    WHERE id=$3
+                    WHERE id=$2
 
                     RETURNING
-
                         id,
                         nom,
                         email,
@@ -7130,11 +7253,8 @@ app.patch(
                     `,
 
                     [
-
-                        enabled,
                         premiumUntil,
                         id
-
                     ]
 
                 );
@@ -7143,61 +7263,61 @@ app.patch(
             if (!result.rows.length) {
 
                 return error(
-
                     res,
-
                     "Utilisateur introuvable.",
-
                     404
-
                 );
 
             }
 
 
+            /* ====================================================
+               JOURNAL ADMIN
+            ==================================================== */
+
             await logActivity(
 
-                enabled
-                    ? "ENABLE_PREMIUM"
-                    : "DISABLE_PREMIUM",
+                "ENABLE_PREMIUM",
 
-                enabled
-                    ? `Premium activé pour utilisateur ${id} pendant ${days} jours`
-                    : `Premium désactivé pour utilisateur ${id}`,
+                `Premium activé pour l'utilisateur ${id} pendant ${days} jours`,
 
                 id
 
             );
 
 
+            /* ====================================================
+               RÉPONSE
+            ==================================================== */
+
             return success(
 
                 res,
 
                 {
-
                     ...result.rows[0],
-
-                    premium_days:
-                        enabled
-                            ? days
-                            : 0
-
+                    premium_days: days
                 },
 
-                enabled
-                    ? "Premium activé"
-                    : "Premium désactivé"
+                "Le statut Premium a été activé."
 
             );
 
-        } catch (err) {
+        }
+
+        catch (err) {
+
+            console.error(
+                "Erreur gestion Premium :",
+                err
+            );
+
 
             return error(
 
                 res,
 
-                "Impossible de modifier Premium.",
+                "Impossible de modifier le statut Premium.",
 
                 500,
 
@@ -7208,9 +7328,7 @@ app.patch(
         }
 
     }
-
 );
-
 
 /* ============================================================
    46. STATISTIQUES
