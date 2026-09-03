@@ -50,40 +50,52 @@
 
 
 /* ============================================================
-   24. NOUVELLE MESSAGERIE BMJ SERVICE
+   BMJ SERVICE
    ============================================================
+   24. MESSAGERIE COMPLÈTE
+   ------------------------------------------------------------
+   VERSION PROPRE + COMPATIBILITÉ
+   ------------------------------------------------------------
+   FONCTIONS :
 
-   SYSTÈME COMPLET :
+   ADMIN
+   GET    /api/messages
+   GET    /api/messages/reponses
+   GET    /api/messages/:id
+   GET    /api/admin/messages/user/:userId
 
-   ADMIN :
-   - Voir tous les messages
-   - Voir les réponses utilisateurs
-   - Envoyer à un utilisateur
-   - Envoyer à tous
-   - Envoyer aux standards
-   - Envoyer aux premium
-   - Modifier
-   - Changer destinataire
-   - Convertir individuel -> officiel
-   - Convertir officiel -> individuel
-   - Supprimer
+   POST   /api/messages/send-user
+   POST   /api/messages/user
 
-   UTILISATEUR :
-   - Voir ses messages
-   - Voir les communiqués
-   - Voir les réponses
-   - Marquer comme lu
-   - Répondre à un message individuel
-   - Impossible de répondre à un communiqué
+   POST   /api/messages/send-all
+   POST   /api/messages/send-standard
+   POST   /api/messages/send-premium
+   POST   /api/messages/send-official
+   POST   /api/messages/official
 
-   IMPORTANT :
-   Cette section remplace toutes les anciennes
-   routes de messagerie.
-============================================================ */
+   PATCH  /api/messages/:id
+   POST   /api/messages/:id/convert
+   DELETE /api/messages/:id
+
+
+   UTILISATEUR
+   GET    /api/utilisateurs/:id/messages
+   GET    /api/utilisateurs/:userId/messages/:messageId
+
+   PATCH  /api/utilisateurs/:userId/messages/:messageId/read
+
+   POST   /api/utilisateurs/:userId/messages/:messageId/repondre
+   POST   /api/utilisateurs/:userId/messages/:messageId/reply
+
+   POST   /api/messages/reply
+
+   GET    /api/utilisateurs/:userId/messages/stream
+
+   ============================================================ */
 
 
 /* ============================================================
-   24.1 OUTILS MESSAGERIE
+   24.1 CONFIGURATION
 ============================================================ */
 
 const MESSAGE_TYPES = {
@@ -93,102 +105,185 @@ const MESSAGE_TYPES = {
 };
 
 
-const MESSAGE_PRIORITIES = [
-    "normal",
-    "important",
-    "urgent"
-];
+const MESSAGE_PRIORITIES = {
+    NORMAL: "normal",
+    IMPORTANT: "important",
+    URGENT: "urgent"
+};
 
 
-const MESSAGE_AUDIENCES = [
-    "all",
-    "standard",
-    "premium",
-    "individual",
-    "admin"
-];
+const MESSAGE_AUDIENCES = {
+    ALL: "all",
+    STANDARD: "standard",
+    PREMIUM: "premium",
+    INDIVIDUAL: "individual",
+    ADMIN: "admin"
+};
+
+
+/*
+ * Connexions SSE actives.
+ *
+ * userId => Set(response)
+ *
+ * Exemple :
+ *
+ * 12 => Set(res1, res2)
+ * 18 => Set(res3)
+ */
+
+const messageSSEClients = new Map();
 
 
 /* ============================================================
-   NORMALISER PRIORITÉ
+   24.2 NORMALISATION
 ============================================================ */
 
 function normalizeMessagePriority(value) {
 
     const priority =
-        String(
-            value || "normal"
-        )
-        .trim()
-        .toLowerCase();
-
+        String(value || "normal")
+            .trim()
+            .toLowerCase();
 
     if (
-        MESSAGE_PRIORITIES.includes(
-            priority
-        )
+        priority === "urgent" ||
+        priority === "important"
     ) {
-
         return priority;
-
     }
 
-
     return "normal";
-
 }
 
-
-/* ============================================================
-   NORMALISER AUDIENCE
-============================================================ */
 
 function normalizeMessageAudience(value) {
 
     const audience =
-        String(
-            value || "all"
-        )
-        .trim()
-        .toLowerCase();
-
+        String(value || "individual")
+            .trim()
+            .toLowerCase();
 
     if (
-        MESSAGE_AUDIENCES.includes(
-            audience
-        )
+        [
+            "all",
+            "standard",
+            "premium",
+            "individual",
+            "admin"
+        ].includes(audience)
     ) {
-
         return audience;
-
     }
 
+    return "individual";
+}
 
-    return "all";
 
+function normalizeMessageType(value) {
+
+    const type =
+        String(value || "user")
+            .trim()
+            .toLowerCase();
+
+    if (
+        type === "official" ||
+        type === "user_reply" ||
+        type === "user"
+    ) {
+        return type;
+    }
+
+    return "user";
 }
 
 
 /* ============================================================
-   UTILISATEUR PAR ID
+   24.3 UTILITAIRES
+============================================================ */
+
+function messageUserIsPremium(user) {
+
+    if (!user) {
+        return false;
+    }
+
+    if (
+        user.premium === true ||
+        user.is_premium === true
+    ) {
+        return true;
+    }
+
+    if (user.premium_until) {
+
+        const until =
+            new Date(user.premium_until);
+
+        if (
+            !isNaN(until.getTime()) &&
+            until > new Date()
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+function getMessageId(value) {
+
+    const id = Number(value);
+
+    if (
+        !Number.isInteger(id) ||
+        id <= 0
+    ) {
+        return null;
+    }
+
+    return id;
+}
+
+
+function cleanMessageText(value, maxLength = 10000) {
+
+    return String(value ?? "")
+        .trim()
+        .substring(0, maxLength);
+}
+
+
+function getAdminEmail() {
+
+    return (
+        typeof ADMIN_EMAIL !== "undefined"
+            ? ADMIN_EMAIL
+            : (
+                process.env.ADMIN_EMAIL ||
+                "admin@bmjservice.com"
+            )
+    );
+}
+
+
+/* ============================================================
+   24.4 RÉCUPÉRER UN UTILISATEUR
 ============================================================ */
 
 async function getMessageUserById(userId) {
 
     const id =
-        parseId(userId);
-
+        getMessageId(userId);
 
     if (!id) {
-
         return null;
-
     }
-
 
     const result =
         await pool.query(
-
             `
             SELECT
                 id,
@@ -214,118 +309,440 @@ async function getMessageUserById(userId) {
 
             LIMIT 1
             `,
-
             [id]
-
         );
 
-
-    return (
-        result.rows[0] ||
-        null
-    );
-
+    return result.rows[0] || null;
 }
 
 
 /* ============================================================
-   VÉRIFIER SI UTILISATEUR PREMIUM
+   24.5 CRÉATION / VÉRIFICATION TABLE MESSAGES
 ============================================================ */
 
-function isMessageUserPremium(user) {
-
-    if (!user) {
-
-        return false;
-
-    }
-
-
-    return (
-        user.premium === true ||
-        user.is_premium === true
-    );
-
-}
-
-
-/* ============================================================
-   JOURNALISATION SÉCURISÉE
-   IMPORTANT :
-   Une erreur du journal ne doit jamais bloquer
-   l'envoi ou la modification d'un message.
-============================================================ */
-
-async function safeMessageActivity(
-    action,
-    description,
-    userId = null,
-    messageId = null
-) {
+async function initializeMessageDatabase() {
 
     try {
 
-        await logActivity(
+        /*
+         * Création de la table principale.
+         */
 
-            action,
+        await pool.query(
+            `
+            CREATE TABLE IF NOT EXISTS messages (
 
-            description,
+                id SERIAL PRIMARY KEY,
 
-            userId,
+                sender_type VARCHAR(30)
+                    NOT NULL
+                    DEFAULT 'admin',
 
-            messageId
+                sender_user_id INTEGER,
 
+                sender_name TEXT,
+                sender_email TEXT,
+
+                recipient_user_id INTEGER,
+
+                recipient_name TEXT,
+                recipient_email TEXT,
+
+                subject TEXT
+                    NOT NULL
+                    DEFAULT 'Message BMJ SERVICE',
+
+                content TEXT
+                    NOT NULL,
+
+                type VARCHAR(30)
+                    NOT NULL
+                    DEFAULT 'user',
+
+                priority VARCHAR(20)
+                    NOT NULL
+                    DEFAULT 'normal',
+
+                audience VARCHAR(30)
+                    NOT NULL
+                    DEFAULT 'individual',
+
+                status VARCHAR(30)
+                    NOT NULL
+                    DEFAULT 'unread',
+
+                read_at TIMESTAMPTZ,
+
+                created_at TIMESTAMPTZ
+                    NOT NULL
+                    DEFAULT NOW(),
+
+                updated_at TIMESTAMPTZ
+                    NOT NULL
+                    DEFAULT NOW()
+            )
+            `
         );
 
-    } catch (err) {
+
+        /*
+         * Compatibilité avec une table déjà existante.
+         */
+
+        const columns = [
+
+            [
+                "sender_type",
+                "VARCHAR(30) DEFAULT 'admin'"
+            ],
+
+            [
+                "sender_user_id",
+                "INTEGER"
+            ],
+
+            [
+                "sender_name",
+                "TEXT"
+            ],
+
+            [
+                "sender_email",
+                "TEXT"
+            ],
+
+            [
+                "recipient_user_id",
+                "INTEGER"
+            ],
+
+            [
+                "recipient_name",
+                "TEXT"
+            ],
+
+            [
+                "recipient_email",
+                "TEXT"
+            ],
+
+            [
+                "subject",
+                "TEXT DEFAULT 'Message BMJ SERVICE'"
+            ],
+
+            [
+                "content",
+                "TEXT"
+            ],
+
+            [
+                "type",
+                "VARCHAR(30) DEFAULT 'user'"
+            ],
+
+            [
+                "priority",
+                "VARCHAR(20) DEFAULT 'normal'"
+            ],
+
+            [
+                "audience",
+                "VARCHAR(30) DEFAULT 'individual'"
+            ],
+
+            [
+                "status",
+                "VARCHAR(30) DEFAULT 'unread'"
+            ],
+
+            [
+                "read_at",
+                "TIMESTAMPTZ"
+            ],
+
+            [
+                "created_at",
+                "TIMESTAMPTZ DEFAULT NOW()"
+            ],
+
+            [
+                "updated_at",
+                "TIMESTAMPTZ DEFAULT NOW()"
+            ]
+        ];
+
+
+        for (const [name, definition] of columns) {
+
+            try {
+
+                await pool.query(
+                    `
+                    ALTER TABLE messages
+                    ADD COLUMN IF NOT EXISTS ${name}
+                    ${definition}
+                    `
+                );
+
+            } catch (error) {
+
+                console.warn(
+                    `Colonne messages.${name} :`,
+                    error.message
+                );
+            }
+        }
+
+
+        /*
+         * Index.
+         */
+
+        await pool.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_messages_recipient_user
+            ON messages(recipient_user_id)
+            `
+        );
+
+
+        await pool.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_messages_created
+            ON messages(created_at DESC)
+            `
+        );
+
+
+        await pool.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_messages_type
+            ON messages(type)
+            `
+        );
+
+
+        await pool.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_messages_audience
+            ON messages(audience)
+            `
+        );
+
+
+        await pool.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_messages_status
+            ON messages(status)
+            `
+        );
+
+
+        console.log(
+            "✓ Table messages vérifiée."
+        );
+
+
+    } catch (error) {
 
         console.error(
-
-            "[MESSAGERIE] Erreur journal :",
-
-            err.message || err
-
+            "❌ Initialisation messages :",
+            error
         );
-
     }
-
 }
 
 
 /* ============================================================
-   RÉCUPÉRER UN MESSAGE COMPLET
+   24.6 NOTIFICATION TEMPS RÉEL
 ============================================================ */
 
-async function getCompleteMessageById(messageId) {
+function notifyMessageUser(
+    userId,
+    message = null
+) {
 
     const id =
-        parseId(messageId);
-
+        getMessageId(userId);
 
     if (!id) {
+        return;
+    }
 
+
+    const clients =
+        messageSSEClients.get(id);
+
+    if (
+        !clients ||
+        clients.size === 0
+    ) {
+        return;
+    }
+
+
+    const payload =
+        JSON.stringify({
+            success: true,
+            type: "new_message",
+            message: message || null,
+            timestamp:
+                new Date().toISOString()
+        });
+
+
+    for (const client of clients) {
+
+        try {
+
+            client.write(
+                `event: message\n`
+            );
+
+            client.write(
+                `data: ${payload}\n\n`
+            );
+
+        } catch (error) {
+
+            try {
+                clients.delete(client);
+            } catch {}
+        }
+    }
+
+
+    if (clients.size === 0) {
+
+        messageSSEClients.delete(id);
+    }
+}
+
+
+/* ============================================================
+   24.7 NOTIFIER PLUSIEURS UTILISATEURS
+============================================================ */
+
+function notifyMessageUsers(
+    users,
+    message
+) {
+
+    if (!Array.isArray(users)) {
+        return;
+    }
+
+    for (const user of users) {
+
+        if (user?.id) {
+
+            notifyMessageUser(
+                user.id,
+                message
+            );
+        }
+    }
+}
+
+
+/* ============================================================
+   24.8 CONSTRUIRE UN MESSAGE
+============================================================ */
+
+function formatMessageForUser(message) {
+
+    if (!message) {
         return null;
+    }
 
+    return {
+
+        id: message.id,
+
+        sender_type:
+            message.sender_type,
+
+        sender_user_id:
+            message.sender_user_id,
+
+        sender_name:
+            message.sender_name,
+
+        sender_email:
+            message.sender_email,
+
+        recipient_user_id:
+            message.recipient_user_id,
+
+        recipient_name:
+            message.recipient_name,
+
+        recipient_email:
+            message.recipient_email,
+
+        subject:
+            message.subject,
+
+        content:
+            message.content,
+
+        type:
+            message.type,
+
+        priority:
+            message.priority,
+
+        audience:
+            message.audience,
+
+        status:
+            message.status || "unread",
+
+        read_at:
+            message.read_at,
+
+        created_at:
+            message.created_at,
+
+        updated_at:
+            message.updated_at
+    };
+}
+
+
+/* ============================================================
+   24.9 RÉCUPÉRER MESSAGE PAR ID
+============================================================ */
+
+async function getCompleteMessageById(
+    messageId
+) {
+
+    const id =
+        getMessageId(messageId);
+
+    if (!id) {
+        return null;
     }
 
 
     const result =
         await pool.query(
-
             `
             SELECT
-
                 m.*,
 
-                u.nom AS user_nom_db,
-                u.email AS user_email_db,
-                u.telephone AS user_telephone_db,
-
-                u.premium AS user_premium_db,
-                u.is_premium AS user_is_premium_db,
-
-                u.blocked AS user_blocked_db,
-                u.is_blocked AS user_is_blocked_db
+                u.nom AS user_nom,
+                u.email AS user_email,
+                u.telephone AS user_telephone,
+                u.premium AS user_premium,
+                u.is_premium AS user_is_premium
 
             FROM messages m
 
@@ -336,65 +753,49 @@ async function getCompleteMessageById(messageId) {
 
             LIMIT 1
             `,
-
             [id]
-
         );
 
 
-    return (
-        result.rows[0] ||
-        null
-    );
-
+    return result.rows[0] || null;
 }
 
 
 /* ============================================================
-   24.2 ADMIN — TOUS LES MESSAGES
+   24.10 ROUTE :
+   GET /api/messages
+   ADMIN
 ============================================================ */
 
 app.get(
-
     "/api/messages",
-
     adminAuth,
-
-    async function(req, res) {
+    async (req, res) => {
 
         try {
 
             const result =
                 await pool.query(
-
                     `
                     SELECT
-
                         m.*,
 
-                        u.nom AS user_nom_db,
-                        u.email AS user_email_db,
-                        u.telephone AS user_telephone_db,
-
-                        u.premium AS user_premium_db,
-                        u.is_premium AS user_is_premium_db,
-
-                        u.blocked AS user_blocked_db,
-                        u.is_blocked AS user_is_blocked_db
+                        u.nom AS user_nom,
+                        u.email AS user_email,
+                        u.telephone AS user_telephone,
+                        u.premium AS user_premium,
+                        u.is_premium AS user_is_premium,
+                        u.premium_until AS user_premium_until
 
                     FROM messages m
 
                     LEFT JOIN users u
-                        ON u.id =
-                           m.recipient_user_id
+                        ON u.id = m.recipient_user_id
 
                     ORDER BY
                         m.created_at DESC,
                         m.id DESC
-
-                    LIMIT 2000
                     `
-
                 );
 
 
@@ -407,93 +808,147 @@ app.get(
 
                 count:
                     result.rows.length
-
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
                 "GET /api/messages :",
-
-                err
-
+                error
             );
 
+            return res.status(500).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible de récupérer les messages.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    "Impossible de récupérer les messages."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.3 ADMIN — UN MESSAGE
+   24.11 ROUTE :
+   GET /api/messages/reponses
+   IMPORTANT :
+   CETTE ROUTE DOIT ÊTRE AVANT /:id
 ============================================================ */
 
 app.get(
-
-    "/api/messages/:id",
-
+    "/api/messages/reponses",
     adminAuth,
+    async (req, res) => {
 
-    async function(req, res) {
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+                        m.*,
+
+                        u.nom AS user_nom,
+                        u.email AS user_email,
+                        u.telephone AS user_telephone
+
+                    FROM messages m
+
+                    LEFT JOIN users u
+                        ON u.id = m.sender_user_id
+
+                    WHERE
+                        LOWER(
+                            COALESCE(
+                                m.sender_type,
+                                ''
+                            )
+                        ) = 'user'
+
+                    ORDER BY
+                        m.created_at DESC,
+                        m.id DESC
+                    `
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                messages:
+                    result.rows,
+
+                count:
+                    result.rows.length
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "GET /api/messages/reponses :",
+                error
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de récupérer les réponses."
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   24.12 ROUTE :
+   GET /api/messages/:id
+   ADMIN
+============================================================ */
+
+app.get(
+    "/api/messages/:id",
+    adminAuth,
+    async (req, res) => {
 
         try {
 
             const id =
-                parseId(
+                getMessageId(
                     req.params.id
                 );
 
 
             if (!id) {
 
-                return error(
+                return res.status(400).json({
 
-                    res,
+                    success: false,
 
-                    "Identifiant de message invalide.",
-
-                    400
-
-                );
-
+                    message:
+                        "Identifiant message invalide."
+                });
             }
 
 
             const message =
-                await getCompleteMessageById(
-                    id
-                );
+                await getCompleteMessageById(id);
 
 
             if (!message) {
 
-                return error(
+                return res.status(404).json({
 
-                    res,
+                    success: false,
 
-                    "Message introuvable.",
-
-                    404
-
-                );
-
+                    message:
+                        "Message introuvable."
+                });
             }
 
 
@@ -502,1925 +957,699 @@ app.get(
                 success: true,
 
                 message
-
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
                 "GET /api/messages/:id :",
-
-                err
-
+                error
             );
 
+            return res.status(500).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible de récupérer le message.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    "Impossible de récupérer le message."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.4 ADMIN — ENVOYER À UN SEUL UTILISATEUR
+   24.13 ENVOYER MESSAGE PERSONNEL
+   POST /api/messages/send-user
 ============================================================ */
 
-app.post(
+async function sendIndividualMessage(
+    req,
+    res
+) {
 
+    try {
+
+        const userId =
+            getMessageId(
+                req.body?.user_id ||
+                req.body?.userId
+            );
+
+
+        const subject =
+            cleanMessageText(
+                req.body?.subject ||
+                "Message BMJ SERVICE",
+                500
+            );
+
+
+        const content =
+            cleanMessageText(
+                req.body?.content,
+                10000
+            );
+
+
+        const priority =
+            normalizeMessagePriority(
+                req.body?.priority
+            );
+
+
+        if (!userId) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Utilisateur invalide."
+            });
+        }
+
+
+        if (!content) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Le message ne peut pas être vide."
+            });
+        }
+
+
+        const user =
+            await getMessageUserById(
+                userId
+            );
+
+
+        if (!user) {
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Utilisateur introuvable."
+            });
+        }
+
+
+        const result =
+            await pool.query(
+                `
+                INSERT INTO messages (
+
+                    sender_type,
+                    sender_name,
+                    sender_email,
+
+                    recipient_user_id,
+                    recipient_name,
+                    recipient_email,
+
+                    subject,
+                    content,
+
+                    type,
+                    priority,
+                    audience,
+
+                    status,
+
+                    created_at,
+                    updated_at
+
+                )
+
+                VALUES (
+
+                    'admin',
+                    $1,
+                    $2,
+
+                    $3,
+                    $4,
+                    $5,
+
+                    $6,
+                    $7,
+
+                    'user',
+                    $8,
+                    'individual',
+
+                    'unread',
+
+                    NOW(),
+                    NOW()
+                )
+
+                RETURNING *
+                `,
+                [
+
+                    "BMJ SERVICE",
+
+                    getAdminEmail(),
+
+                    user.id,
+
+                    user.nom ||
+                        "Utilisateur",
+
+                    user.email ||
+                        "",
+
+                    subject,
+
+                    content,
+
+                    priority
+                ]
+            );
+
+
+        const message =
+            formatMessageForUser(
+                result.rows[0]
+            );
+
+
+        /*
+         * NOTIFICATION IMMÉDIATE
+         */
+
+        notifyMessageUser(
+            user.id,
+            message
+        );
+
+
+        /*
+         * Journal admin si disponible.
+         */
+
+        try {
+
+            if (
+                typeof logActivity ===
+                "function"
+            ) {
+
+                await logActivity(
+                    req,
+                    "message_send_user",
+                    {
+                        user_id: user.id,
+                        message_id: message.id
+                    }
+                );
+            }
+
+        } catch (activityError) {
+
+            console.warn(
+                "Log activité messagerie :",
+                activityError.message
+            );
+        }
+
+
+        return res.status(201).json({
+
+            success: true,
+
+            message:
+                "Message envoyé avec succès.",
+
+            data:
+                message
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "POST /api/messages/send-user :",
+            error
+        );
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Impossible d'envoyer le message."
+        });
+    }
+}
+
+
+app.post(
     "/api/messages/send-user",
-
     adminAuth,
-
-    async function(req, res) {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const userId =
-                parseId(
-
-                    body.user_id ??
-                    body.recipient_id
-
-                );
-
-
-            const subject =
-                String(
-
-                    body.subject ||
-                    ""
-
-                ).trim();
-
-
-            const content =
-                String(
-
-                    body.content ??
-                    body.message ??
-                    ""
-
-                ).trim();
-
-
-            const priority =
-                normalizeMessagePriority(
-                    body.priority
-                );
-
-
-            if (!userId) {
-
-                return error(
-
-                    res,
-
-                    "Veuillez sélectionner un utilisateur.",
-
-                    400
-
-                );
-
-            }
-
-
-            if (!subject) {
-
-                return error(
-
-                    res,
-
-                    "Le sujet est obligatoire.",
-
-                    400
-
-                );
-
-            }
-
-
-            if (!content) {
-
-                return error(
-
-                    res,
-
-                    "Le contenu est obligatoire.",
-
-                    400
-
-                );
-
-            }
-
-
-            if (subject.length > 500) {
-
-                return error(
-
-                    res,
-
-                    "Le sujet ne peut pas dépasser 500 caractères.",
-
-                    400
-
-                );
-
-            }
-
-
-            if (content.length > 10000) {
-
-                return error(
-
-                    res,
-
-                    "Le message ne peut pas dépasser 10 000 caractères.",
-
-                    400
-
-                );
-
-            }
-
-
-            const user =
-                await getMessageUserById(
-                    userId
-                );
-
-
-            if (!user) {
-
-                return error(
-
-                    res,
-
-                    "Utilisateur introuvable.",
-
-                    404
-
-                );
-
-            }
-
-
-            if (
-                user.blocked === true ||
-                user.is_blocked === true
-            ) {
-
-                return error(
-
-                    res,
-
-                    "Impossible d'envoyer un message à un utilisateur bloqué.",
-
-                    403
-
-                );
-
-            }
-
-
-            const result =
-                await pool.query(
-
-                    `
-                    INSERT INTO messages
-                    (
-                        sender_type,
-                        sender_email,
-
-                        recipient_user_id,
-                        recipient_name,
-                        recipient_email,
-
-                        type,
-
-                        subject,
-                        content,
-
-                        priority,
-                        status,
-                        audience,
-
-                        read_at,
-
-                        created_at,
-                        updated_at
-                    )
-
-                    VALUES
-                    (
-                        'admin',
-                        $1,
-
-                        $2,
-                        $3,
-                        $4,
-
-                        'user',
-
-                        $5,
-                        $6,
-
-                        $7,
-                        'sent',
-                        'individual',
-
-                        NULL,
-
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
-                    )
-
-                    RETURNING *
-                    `,
-
-                    [
-
-                        ADMIN_EMAIL,
-
-                        user.id,
-
-                        user.nom ||
-                            "Utilisateur",
-
-                        user.email ||
-                            "",
-
-                        subject,
-
-                        content,
-
-                        priority
-
-                    ]
-
-                );
-
-
-            const message =
-                result.rows[0];
-
-
-            await safeMessageActivity(
-
-                "MESSAGE_ENVOYE",
-
-                `Message envoyé à ${user.nom || user.email || "Utilisateur"} — ID utilisateur ${user.id}`,
-
-                user.id,
-
-                message.id
-
-            );
-
-
-            return res.status(201).json({
-
-                success: true,
-
-                message:
-                    "Message envoyé avec succès.",
-
-                data:
-                    message
-
-            });
-
-
-        } catch (err) {
-
-            console.error(
-
-                "POST /api/messages/send-user :",
-
-                err
-
-            );
-
-
-            return error(
-
-                res,
-
-                "Impossible d'envoyer le message.",
-
-                500,
-
-                err.message
-
-            );
-
-        }
-
-    }
-
+    sendIndividualMessage
 );
 
 
-/* ============================================================
-   24.5 COMPATIBILITÉ ANCIEN NOM
-   POST /api/messages/user
-============================================================ */
+/*
+ * Ancienne route compatible.
+ */
 
 app.post(
-
     "/api/messages/user",
-
     adminAuth,
-
-    async function(req, res, next) {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const userId =
-                parseId(
-
-                    body.user_id ??
-                    body.recipient_id
-
-                );
-
-
-            const subject =
-                String(
-                    body.subject || ""
-                ).trim();
-
-
-            const content =
-                String(
-                    body.content ??
-                    body.message ??
-                    ""
-                ).trim();
-
-
-            const priority =
-                normalizeMessagePriority(
-                    body.priority
-                );
-
-
-            if (!userId) {
-
-                return error(
-                    res,
-                    "Veuillez sélectionner un utilisateur.",
-                    400
-                );
-
-            }
-
-
-            if (!subject) {
-
-                return error(
-                    res,
-                    "Le sujet est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            if (!content) {
-
-                return error(
-                    res,
-                    "Le contenu est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            const user =
-                await getMessageUserById(
-                    userId
-                );
-
-
-            if (!user) {
-
-                return error(
-                    res,
-                    "Utilisateur introuvable.",
-                    404
-                );
-
-            }
-
-
-            const result =
-                await pool.query(
-
-                    `
-                    INSERT INTO messages
-                    (
-                        sender_type,
-                        sender_email,
-
-                        recipient_user_id,
-                        recipient_name,
-                        recipient_email,
-
-                        type,
-                        subject,
-                        content,
-
-                        priority,
-                        status,
-                        audience,
-
-                        read_at,
-                        created_at,
-                        updated_at
-                    )
-
-                    VALUES
-                    (
-                        'admin',
-                        $1,
-
-                        $2,
-                        $3,
-                        $4,
-
-                        'user',
-                        $5,
-                        $6,
-
-                        $7,
-                        'sent',
-                        'individual',
-
-                        NULL,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
-                    )
-
-                    RETURNING *
-                    `,
-
-                    [
-
-                        ADMIN_EMAIL,
-
-                        user.id,
-
-                        user.nom ||
-                            "Utilisateur",
-
-                        user.email ||
-                            "",
-
-                        subject,
-
-                        content,
-
-                        priority
-
-                    ]
-
-                );
-
-
-            const message =
-                result.rows[0];
-
-
-            await safeMessageActivity(
-
-                "MESSAGE_ENVOYE",
-
-                `Message individuel envoyé à ${user.nom || user.email || "Utilisateur"}`,
-
-                user.id,
-
-                message.id
-
-            );
-
-
-            return res.status(201).json({
-
-                success: true,
-
-                message:
-                    "Message envoyé avec succès.",
-
-                data:
-                    message
-
-            });
-
-
-        } catch (err) {
-
-            console.error(
-
-                "POST /api/messages/user :",
-
-                err
-
-            );
-
-
-            return error(
-
-                res,
-
-                "Impossible d'envoyer le message.",
-
-                500,
-
-                err.message
-
-            );
-
-        }
-
-    }
-
+    sendIndividualMessage
 );
 
 
 /* ============================================================
-   24.6 ADMIN — COMMUNIQUÉ POUR TOUT LE MONDE
+   24.14 ENVOI OFFICIEL
 ============================================================ */
 
-app.post(
+async function sendOfficialMessage(
+    req,
+    res,
+    forcedAudience = null
+) {
 
-    "/api/messages/send-all",
+    try {
 
-    adminAuth,
-
-    async function(req, res) {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const subject =
-                String(
-                    body.subject || ""
-                ).trim();
-
-
-            const content =
-                String(
-                    body.content ??
-                    body.message ??
-                    ""
-                ).trim();
-
-
-            const priority =
-                normalizeMessagePriority(
-                    body.priority
-                );
-
-
-            if (!subject) {
-
-                return error(
-                    res,
-                    "Le sujet est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            if (!content) {
-
-                return error(
-                    res,
-                    "Le contenu est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            const result =
-                await pool.query(
-
-                    `
-                    INSERT INTO messages
-                    (
-                        sender_type,
-                        sender_email,
-
-                        recipient_user_id,
-                        recipient_name,
-                        recipient_email,
-
-                        type,
-
-                        subject,
-                        content,
-
-                        priority,
-                        status,
-                        audience,
-
-                        read_at,
-                        created_at,
-                        updated_at
-                    )
-
-                    VALUES
-                    (
-                        'admin',
-                        $1,
-
-                        NULL,
-                        NULL,
-                        NULL,
-
-                        'official',
-
-                        $2,
-                        $3,
-
-                        $4,
-                        'sent',
-                        'all',
-
-                        NULL,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
-                    )
-
-                    RETURNING *
-                    `,
-
-                    [
-
-                        ADMIN_EMAIL,
-
-                        subject,
-
-                        content,
-
-                        priority
-
-                    ]
-
-                );
-
-
-            const message =
-                result.rows[0];
-
-
-            await safeMessageActivity(
-
-                "COMMUNIQUE_TOUT",
-
-                `Communiqué envoyé à tous les utilisateurs — message ${message.id}`,
-
-                null,
-
-                message.id
-
+        const audience =
+            normalizeMessageAudience(
+                forcedAudience ||
+                req.body?.audience ||
+                "all"
             );
 
 
-            return res.status(201).json({
+        const subject =
+            cleanMessageText(
+                req.body?.subject ||
+                "Annonce BMJ SERVICE",
+                500
+            );
 
-                success: true,
+
+        const content =
+            cleanMessageText(
+                req.body?.content,
+                10000
+            );
+
+
+        const priority =
+            normalizeMessagePriority(
+                req.body?.priority
+            );
+
+
+        if (!content) {
+
+            return res.status(400).json({
+
+                success: false,
 
                 message:
-                    "Communiqué envoyé à tous les utilisateurs.",
-
-                data:
-                    message
-
+                    "Le message ne peut pas être vide."
             });
-
-
-        } catch (err) {
-
-            console.error(
-
-                "POST /api/messages/send-all :",
-
-                err
-
-            );
-
-
-            return error(
-
-                res,
-
-                "Impossible d'envoyer le communiqué.",
-
-                500,
-
-                err.message
-
-            );
-
         }
 
-    }
 
-);
+        /*
+         * Une annonce officielle est UNE entrée
+         * en base, pas une copie par utilisateur.
+         */
+
+        const result =
+            await pool.query(
+                `
+                INSERT INTO messages (
+
+                    sender_type,
+                    sender_name,
+                    sender_email,
+
+                    recipient_user_id,
+                    recipient_name,
+                    recipient_email,
+
+                    subject,
+                    content,
+
+                    type,
+                    priority,
+                    audience,
+
+                    status,
+
+                    created_at,
+                    updated_at
+
+                )
+
+                VALUES (
+
+                    'admin',
+                    $1,
+                    $2,
+
+                    NULL,
+                    NULL,
+                    NULL,
+
+                    $3,
+                    $4,
+
+                    'official',
+                    $5,
+                    $6,
+
+                    'unread',
+
+                    NOW(),
+                    NOW()
+                )
+
+                RETURNING *
+                `,
+                [
+
+                    "BMJ SERVICE",
+
+                    getAdminEmail(),
+
+                    subject,
+
+                    content,
+
+                    priority,
+
+                    audience
+                ]
+            );
+
+
+        const message =
+            formatMessageForUser(
+                result.rows[0]
+            );
+
+
+        /*
+         * Déterminer les utilisateurs
+         * actuellement concernés.
+         */
+
+        let usersQuery = `
+            SELECT
+                id,
+                nom,
+                email,
+                premium,
+                is_premium,
+                premium_until
+            FROM users
+            WHERE 1 = 1
+        `;
+
+        const params = [];
+
+
+        if (
+            audience === "standard"
+        ) {
+
+            usersQuery += `
+                AND COALESCE(premium, false) = false
+                AND COALESCE(is_premium, false) = false
+                AND (
+                    premium_until IS NULL
+                    OR premium_until <= NOW()
+                )
+            `;
+        }
+
+
+        if (
+            audience === "premium"
+        ) {
+
+            usersQuery += `
+                AND (
+                    COALESCE(premium, false) = true
+                    OR COALESCE(is_premium, false) = true
+                    OR premium_until > NOW()
+                )
+            `;
+        }
+
+
+        const usersResult =
+            await pool.query(
+                usersQuery,
+                params
+            );
+
+
+        /*
+         * Notification temps réel.
+         */
+
+        notifyMessageUsers(
+            usersResult.rows,
+            message
+        );
+
+
+        return res.status(201).json({
+
+            success: true,
+
+            message:
+                "Annonce envoyée avec succès.",
+
+            data:
+                message,
+
+            recipients:
+                usersResult.rows.length
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "Envoi annonce officielle :",
+            error
+        );
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Impossible d'envoyer l'annonce."
+        });
+    }
+}
 
 
 /* ============================================================
-   24.7 ADMIN — MESSAGE AUX MEMBRES PREMIUM
+   24.15 ROUTES ANNONCES
 ============================================================ */
 
 app.post(
-
-    "/api/messages/send-premium",
-
-    adminAuth,
-
-    async function(req, res) {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const subject =
-                String(
-                    body.subject || ""
-                ).trim();
-
-
-            const content =
-                String(
-                    body.content ??
-                    body.message ??
-                    ""
-                ).trim();
-
-
-            const priority =
-                normalizeMessagePriority(
-                    body.priority
-                );
-
-
-            if (!subject) {
-
-                return error(
-                    res,
-                    "Le sujet est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            if (!content) {
-
-                return error(
-                    res,
-                    "Le contenu est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            const result =
-                await pool.query(
-
-                    `
-                    INSERT INTO messages
-                    (
-                        sender_type,
-                        sender_email,
-
-                        recipient_user_id,
-                        recipient_name,
-                        recipient_email,
-
-                        type,
-
-                        subject,
-                        content,
-
-                        priority,
-                        status,
-                        audience,
-
-                        read_at,
-                        created_at,
-                        updated_at
-                    )
-
-                    VALUES
-                    (
-                        'admin',
-                        $1,
-
-                        NULL,
-                        NULL,
-                        NULL,
-
-                        'official',
-
-                        $2,
-                        $3,
-
-                        $4,
-                        'sent',
-                        'premium',
-
-                        NULL,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
-                    )
-
-                    RETURNING *
-                    `,
-
-                    [
-
-                        ADMIN_EMAIL,
-
-                        subject,
-
-                        content,
-
-                        priority
-
-                    ]
-
-                );
-
-
-            const message =
-                result.rows[0];
-
-
-            await safeMessageActivity(
-
-                "COMMUNIQUE_PREMIUM",
-
-                `Message envoyé aux membres premium — message ${message.id}`,
-
-                null,
-
-                message.id
-
-            );
-
-
-            return res.status(201).json({
-
-                success: true,
-
-                message:
-                    "Message envoyé aux membres premium.",
-
-                data:
-                    message
-
-            });
-
-
-        } catch (err) {
-
-            console.error(
-
-                "POST /api/messages/send-premium :",
-
-                err
-
-            );
-
-
-            return error(
-
-                res,
-
-                "Impossible d'envoyer le message aux membres premium.",
-
-                500,
-
-                err.message
-
-            );
-
-        }
-
-    }
-
-);
-
-
-/* ============================================================
-   24.8 ADMIN — MESSAGE AUX MEMBRES STANDARDS
-============================================================ */
-
-app.post(
-
-    "/api/messages/send-standard",
-
-    adminAuth,
-
-    async function(req, res) {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const subject =
-                String(
-                    body.subject || ""
-                ).trim();
-
-
-            const content =
-                String(
-                    body.content ??
-                    body.message ??
-                    ""
-                ).trim();
-
-
-            const priority =
-                normalizeMessagePriority(
-                    body.priority
-                );
-
-
-            if (!subject) {
-
-                return error(
-                    res,
-                    "Le sujet est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            if (!content) {
-
-                return error(
-                    res,
-                    "Le contenu est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            const result =
-                await pool.query(
-
-                    `
-                    INSERT INTO messages
-                    (
-                        sender_type,
-                        sender_email,
-
-                        recipient_user_id,
-                        recipient_name,
-                        recipient_email,
-
-                        type,
-
-                        subject,
-                        content,
-
-                        priority,
-                        status,
-                        audience,
-
-                        read_at,
-                        created_at,
-                        updated_at
-                    )
-
-                    VALUES
-                    (
-                        'admin',
-                        $1,
-
-                        NULL,
-                        NULL,
-                        NULL,
-
-                        'official',
-
-                        $2,
-                        $3,
-
-                        $4,
-                        'sent',
-                        'standard',
-
-                        NULL,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
-                    )
-
-                    RETURNING *
-                    `,
-
-                    [
-
-                        ADMIN_EMAIL,
-
-                        subject,
-
-                        content,
-
-                        priority
-
-                    ]
-
-                );
-
-
-            const message =
-                result.rows[0];
-
-
-            await safeMessageActivity(
-
-                "COMMUNIQUE_STANDARD",
-
-                `Message envoyé aux membres standards — message ${message.id}`,
-
-                null,
-
-                message.id
-
-            );
-
-
-            return res.status(201).json({
-
-                success: true,
-
-                message:
-                    "Message envoyé aux membres standards.",
-
-                data:
-                    message
-
-            });
-
-
-        } catch (err) {
-
-            console.error(
-
-                "POST /api/messages/send-standard :",
-
-                err
-
-            );
-
-
-            return error(
-
-                res,
-
-                "Impossible d'envoyer le message aux membres standards.",
-
-                500,
-
-                err.message
-
-            );
-
-        }
-
-    }
-
-);
-
-
-/* ============================================================
-   24.9 ADMIN — ROUTE UNIQUE POUR LES COMMUNIQUÉS
-============================================================ */
-
-app.post(
-
     "/api/messages/send-official",
-
     adminAuth,
-
-    async function(req, res) {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const subject =
-                String(
-                    body.subject || ""
-                ).trim();
-
-
-            const content =
-                String(
-                    body.content ??
-                    body.message ??
-                    ""
-                ).trim();
-
-
-            const priority =
-                normalizeMessagePriority(
-                    body.priority
-                );
-
-
-            const audience =
-                normalizeMessageAudience(
-                    body.audience
-                );
-
-
-            if (!subject) {
-
-                return error(
-                    res,
-                    "Le sujet est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            if (!content) {
-
-                return error(
-                    res,
-                    "Le contenu est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            if (
-                ![
-                    "all",
-                    "premium",
-                    "standard"
-                ].includes(audience)
-            ) {
-
-                return error(
-                    res,
-                    "Audience invalide.",
-                    400
-                );
-
-            }
-
-
-            const result =
-                await pool.query(
-
-                    `
-                    INSERT INTO messages
-                    (
-                        sender_type,
-                        sender_email,
-
-                        recipient_user_id,
-                        recipient_name,
-                        recipient_email,
-
-                        type,
-
-                        subject,
-                        content,
-
-                        priority,
-                        status,
-                        audience,
-
-                        read_at,
-                        created_at,
-                        updated_at
-                    )
-
-                    VALUES
-                    (
-                        'admin',
-                        $1,
-
-                        NULL,
-                        NULL,
-                        NULL,
-
-                        'official',
-
-                        $2,
-                        $3,
-
-                        $4,
-                        'sent',
-                        $5,
-
-                        NULL,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
-                    )
-
-                    RETURNING *
-                    `,
-
-                    [
-
-                        ADMIN_EMAIL,
-
-                        subject,
-
-                        content,
-
-                        priority,
-
-                        audience
-
-                    ]
-
-                );
-
-
-            const message =
-                result.rows[0];
-
-
-            await safeMessageActivity(
-
-                "COMMUNIQUE_ENVOYE",
-
-                `Communiqué envoyé — audience ${audience}`,
-
-                null,
-
-                message.id
-
-            );
-
-
-            return res.status(201).json({
-
-                success: true,
-
-                message:
-                    "Communiqué publié avec succès.",
-
-                data:
-                    message
-
-            });
-
-
-        } catch (err) {
-
-            console.error(
-
-                "POST /api/messages/send-official :",
-
-                err
-
-            );
-
-
-            return error(
-
-                res,
-
-                "Impossible de publier le communiqué.",
-
-                500,
-
-                err.message
-
-            );
-
-        }
-
+    async (req, res) => {
+
+        return sendOfficialMessage(
+            req,
+            res
+        );
     }
-
 );
 
-
-/* ============================================================
-   24.10 ANCIEN NOM OFFICIAL — COMPATIBILITÉ
-============================================================ */
 
 app.post(
-
     "/api/messages/official",
-
     adminAuth,
-
-    async function(req, res) {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const subject =
-                String(
-                    body.subject || ""
-                ).trim();
-
-
-            const content =
-                String(
-                    body.content ??
-                    body.message ??
-                    ""
-                ).trim();
-
-
-            const priority =
-                normalizeMessagePriority(
-                    body.priority
-                );
-
-
-            const audience =
-                normalizeMessageAudience(
-                    body.audience
-                );
-
-
-            if (!subject || !content) {
-
-                return error(
-                    res,
-                    "Le sujet et le contenu sont obligatoires.",
-                    400
-                );
-
-            }
-
-
-            if (
-                ![
-                    "all",
-                    "premium",
-                    "standard"
-                ].includes(audience)
-            ) {
-
-                return error(
-                    res,
-                    "Audience invalide.",
-                    400
-                );
-
-            }
-
-
-            const result =
-                await pool.query(
-
-                    `
-                    INSERT INTO messages
-                    (
-                        sender_type,
-                        sender_email,
-
-                        type,
-                        subject,
-                        content,
-
-                        priority,
-                        status,
-                        audience,
-
-                        created_at,
-                        updated_at
-                    )
-
-                    VALUES
-                    (
-                        'admin',
-                        $1,
-
-                        'official',
-                        $2,
-                        $3,
-
-                        $4,
-                        'sent',
-                        $5,
-
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
-                    )
-
-                    RETURNING *
-                    `,
-
-                    [
-
-                        ADMIN_EMAIL,
-
-                        subject,
-
-                        content,
-
-                        priority,
-
-                        audience
-
-                    ]
-
-                );
-
-
-            const message =
-                result.rows[0];
-
-
-            await safeMessageActivity(
-
-                "COMMUNIQUE_ENVOYE",
-
-                `Communiqué publié — audience ${audience}`,
-
-                null,
-
-                message.id
-
-            );
-
-
-            return res.status(201).json({
-
-                success: true,
-
-                message:
-                    "Communiqué publié avec succès.",
-
-                data:
-                    message
-
-            });
-
-
-        } catch (err) {
-
-            console.error(
-
-                "POST /api/messages/official :",
-
-                err
-
-            );
-
-
-            return error(
-
-                res,
-
-                "Impossible de publier le communiqué.",
-
-                500,
-
-                err.message
-
-            );
-
-        }
-
+    async (req, res) => {
+
+        return sendOfficialMessage(
+            req,
+            res
+        );
     }
+);
 
+
+app.post(
+    "/api/messages/send-all",
+    adminAuth,
+    async (req, res) => {
+
+        return sendOfficialMessage(
+            req,
+            res,
+            "all"
+        );
+    }
+);
+
+
+app.post(
+    "/api/messages/send-standard",
+    adminAuth,
+    async (req, res) => {
+
+        return sendOfficialMessage(
+            req,
+            res,
+            "standard"
+        );
+    }
+);
+
+
+app.post(
+    "/api/messages/send-premium",
+    adminAuth,
+    async (req, res) => {
+
+        return sendOfficialMessage(
+            req,
+            res,
+            "premium"
+        );
+    }
 );
 
 
 /* ============================================================
-   24.11 ADMIN — MODIFIER UN MESSAGE
+   24.16 MODIFIER MESSAGE
+   PATCH /api/messages/:id
 ============================================================ */
 
 app.patch(
-
     "/api/messages/:id",
-
     adminAuth,
-
-    async function(req, res) {
+    async (req, res) => {
 
         try {
 
             const id =
-                parseId(
+                getMessageId(
                     req.params.id
                 );
 
 
             if (!id) {
 
-                return error(
-                    res,
-                    "Identifiant de message invalide.",
-                    400
-                );
+                return res.status(400).json({
 
+                    success: false,
+
+                    message:
+                        "Identifiant invalide."
+                });
             }
 
 
             const existing =
-                await getCompleteMessageById(
-                    id
-                );
+                await getCompleteMessageById(id);
 
 
             if (!existing) {
 
-                return error(
-                    res,
-                    "Message introuvable.",
-                    404
-                );
+                return res.status(404).json({
 
-            }
+                    success: false,
 
-
-            const body =
-                req.body || {};
-
-
-            let type =
-                String(
-
-                    body.type ??
-                    existing.type ??
-                    "user"
-
-                )
-                .trim()
-                .toLowerCase();
-
-
-            /*
-               Une réponse utilisateur ne doit pas
-               devenir un message administrateur
-               par modification normale.
-            */
-
-            if (
-                type === "user_reply"
-            ) {
-
-                return error(
-
-                    res,
-
-                    "Une réponse utilisateur ne peut pas être transformée directement en message administrateur.",
-
-                    400
-
-                );
-
-            }
-
-
-            if (
-                ![
-                    "user",
-                    "official"
-                ].includes(type)
-            ) {
-
-                return error(
-                    res,
-                    "Type de message invalide.",
-                    400
-                );
-
+                    message:
+                        "Message introuvable."
+                });
             }
 
 
             const subject =
-                String(
-
-                    body.subject ??
-                    existing.subject ??
-                    ""
-
-                ).trim();
+                req.body?.subject !== undefined
+                    ? cleanMessageText(
+                        req.body.subject,
+                        500
+                    )
+                    : existing.subject;
 
 
             const content =
-                String(
-
-                    body.content ??
-                    existing.content ??
-                    ""
-
-                ).trim();
+                req.body?.content !== undefined
+                    ? cleanMessageText(
+                        req.body.content,
+                        10000
+                    )
+                    : existing.content;
 
 
             const priority =
-                normalizeMessagePriority(
-
-                    body.priority ??
-                    existing.priority
-
-                );
-
-
-            if (!subject) {
-
-                return error(
-                    res,
-                    "Le sujet est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            if (!content) {
-
-                return error(
-                    res,
-                    "Le contenu est obligatoire.",
-                    400
-                );
-
-            }
-
-
-            if (type === "user") {
-
-                const userId =
-                    parseId(
-
-                        body.user_id ??
-                        body.recipient_id ??
-                        existing.recipient_user_id
-
-                    );
-
-
-                if (!userId) {
-
-                    return error(
-                        res,
-                        "Le destinataire est obligatoire.",
-                        400
-                    );
-
-                }
-
-
-                const user =
-                    await getMessageUserById(
-                        userId
-                    );
-
-
-                if (!user) {
-
-                    return error(
-                        res,
-                        "Utilisateur destinataire introuvable.",
-                        404
-                    );
-
-                }
-
-
-                const result =
-                    await pool.query(
-
-                        `
-                        UPDATE messages
-
-                        SET
-
-                            sender_type = 'admin',
-                            sender_email = $1,
-
-                            recipient_user_id = $2,
-                            recipient_name = $3,
-                            recipient_email = $4,
-
-                            type = 'user',
-
-                            subject = $5,
-                            content = $6,
-
-                            priority = $7,
-
-                            status = 'sent',
-                            audience = 'individual',
-
-                            read_at = NULL,
-
-                            updated_at =
-                                CURRENT_TIMESTAMP
-
-                        WHERE id = $8
-
-                        RETURNING *
-                        `,
-
-                        [
-
-                            ADMIN_EMAIL,
-
-                            user.id,
-
-                            user.nom ||
-                                "Utilisateur",
-
-                            user.email ||
-                                "",
-
-                            subject,
-
-                            content,
-
-                            priority,
-
-                            id
-
-                        ]
-
-                    );
-
-
-                const updated =
-                    result.rows[0];
-
-
-                await safeMessageActivity(
-
-                    "MESSAGE_MODIFIE",
-
-                    `Message individuel modifié — utilisateur ${user.id}`,
-
-                    user.id,
-
-                    id
-
-                );
-
-
-                return res.json({
-
-                    success: true,
-
-                    message:
-                        "Message modifié avec succès.",
-
-                    data:
-                        updated
-
-                });
-
-            }
-
-
-            const audience =
-                normalizeMessageAudience(
-
-                    body.audience ??
-                    existing.audience ??
-                    "all"
-
-                );
-
-
-            if (
-                ![
-                    "all",
-                    "premium",
-                    "standard"
-                ].includes(audience)
-            ) {
-
-                return error(
-                    res,
-                    "Audience invalide.",
-                    400
-                );
-
-            }
+                req.body?.priority !== undefined
+                    ? normalizeMessagePriority(
+                        req.body.priority
+                    )
+                    : existing.priority;
 
 
             const result =
                 await pool.query(
-
                     `
                     UPDATE messages
 
                     SET
+                        subject = $1,
+                        content = $2,
+                        priority = $3,
+                        updated_at = NOW()
 
-                        sender_type = 'admin',
-                        sender_email = $1,
-
-                        recipient_user_id = NULL,
-                        recipient_name = NULL,
-                        recipient_email = NULL,
-
-                        type = 'official',
-
-                        subject = $2,
-                        content = $3,
-
-                        priority = $4,
-
-                        status = 'sent',
-                        audience = $5,
-
-                        read_at = NULL,
-
-                        updated_at =
-                            CURRENT_TIMESTAMP
-
-                    WHERE id = $6
+                    WHERE id = $4
 
                     RETURNING *
                     `,
-
                     [
-
-                        ADMIN_EMAIL,
-
                         subject,
-
                         content,
-
                         priority,
-
-                        audience,
-
                         id
-
                     ]
-
                 );
 
 
-            const updated =
-                result.rows[0];
+            const message =
+                formatMessageForUser(
+                    result.rows[0]
+                );
 
 
-            await safeMessageActivity(
+            /*
+             * Si un message est modifié,
+             * on prévient l'utilisateur concerné.
+             */
 
-                "COMMUNIQUE_MODIFIE",
+            if (
+                message.recipient_user_id
+            ) {
 
-                `Communiqué modifié — audience ${audience}`,
-
-                null,
-
-                id
-
-            );
+                notifyMessageUser(
+                    message.recipient_user_id,
+                    message
+                );
+            }
 
 
             return res.json({
@@ -2428,134 +1657,109 @@ app.patch(
                 success: true,
 
                 message:
-                    "Communiqué modifié avec succès.",
+                    "Message modifié avec succès.",
 
                 data:
-                    updated
-
+                    message
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
-                "PATCH /api/messages/:id :",
-
-                err
-
+                "PATCH message :",
+                error
             );
 
+            return res.status(500).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible de modifier le message.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    "Impossible de modifier le message."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.12 ADMIN — CONVERTIR MESSAGE
+   24.17 CONVERSION MESSAGE
 ============================================================ */
 
 app.post(
-
     "/api/messages/:id/convert",
-
     adminAuth,
-
-    async function(req, res) {
+    async (req, res) => {
 
         try {
 
             const id =
-                parseId(
+                getMessageId(
                     req.params.id
                 );
 
 
             if (!id) {
 
-                return error(
-                    res,
-                    "Identifiant de message invalide.",
-                    400
-                );
+                return res.status(400).json({
 
+                    success: false,
+
+                    message:
+                        "Identifiant invalide."
+                });
             }
 
 
             const existing =
-                await getCompleteMessageById(
-                    id
-                );
+                await getCompleteMessageById(id);
 
 
             if (!existing) {
 
-                return error(
-                    res,
-                    "Message introuvable.",
-                    404
-                );
+                return res.status(404).json({
 
+                    success: false,
+
+                    message:
+                        "Message introuvable."
+                });
             }
-
-
-            const body =
-                req.body || {};
 
 
             const mode =
                 String(
-
-                    body.mode ||
-                    body.type ||
-                    ""
-
+                    req.body?.mode || ""
                 )
-                .trim()
-                .toLowerCase();
+                    .trim()
+                    .toLowerCase();
 
 
-            /* =================================================
-               INDIVIDUEL
-            ================================================= */
+            /*
+             * Conversion en message individuel.
+             */
 
             if (
-                mode === "user" ||
-                mode === "individual"
+                mode === "user"
             ) {
 
                 const userId =
-                    parseId(
-
-                        body.user_id ??
-                        body.recipient_id
-
+                    getMessageId(
+                        req.body?.user_id ||
+                        req.body?.userId
                     );
 
 
                 if (!userId) {
 
-                    return error(
-                        res,
-                        "Veuillez sélectionner le nouveau destinataire.",
-                        400
-                    );
+                    return res.status(400).json({
 
+                        success: false,
+
+                        message:
+                            "Utilisateur invalide."
+                    });
                 }
 
 
@@ -2567,78 +1771,53 @@ app.post(
 
                 if (!user) {
 
-                    return error(
-                        res,
-                        "Utilisateur introuvable.",
-                        404
-                    );
+                    return res.status(404).json({
 
+                        success: false,
+
+                        message:
+                            "Utilisateur introuvable."
+                    });
                 }
 
 
                 const result =
                     await pool.query(
-
                         `
                         UPDATE messages
 
                         SET
-
-                            sender_type = 'admin',
-                            sender_email = $1,
-
-                            recipient_user_id = $2,
-                            recipient_name = $3,
-                            recipient_email = $4,
-
                             type = 'user',
-
                             audience = 'individual',
 
-                            status = 'sent',
-                            read_at = NULL,
+                            recipient_user_id = $1,
+                            recipient_name = $2,
+                            recipient_email = $3,
 
-                            updated_at =
-                                CURRENT_TIMESTAMP
+                            updated_at = NOW()
 
-                        WHERE id = $5
+                        WHERE id = $4
 
                         RETURNING *
                         `,
-
                         [
-
-                            ADMIN_EMAIL,
-
                             user.id,
-
-                            user.nom ||
-                                "Utilisateur",
-
-                            user.email ||
-                                "",
-
+                            user.nom,
+                            user.email,
                             id
-
                         ]
-
                     );
 
 
-                const converted =
-                    result.rows[0];
+                const message =
+                    formatMessageForUser(
+                        result.rows[0]
+                    );
 
 
-                await safeMessageActivity(
-
-                    "MESSAGE_CONVERTI_INDIVIDUEL",
-
-                    `Message converti en message individuel pour ${user.nom || user.email || user.id}`,
-
+                notifyMessageUser(
                     user.id,
-
-                    id
-
+                    message
                 );
 
 
@@ -2647,19 +1826,17 @@ app.post(
                     success: true,
 
                     message:
-                        "Message converti en message individuel.",
+                        "Message converti en message personnel.",
 
                     data:
-                        converted
-
+                        message
                 });
-
             }
 
 
-            /* =================================================
-               OFFICIEL
-            ================================================= */
+            /*
+             * Conversion en annonce.
+             */
 
             if (
                 mode === "official"
@@ -2667,88 +1844,41 @@ app.post(
 
                 const audience =
                     normalizeMessageAudience(
-
-                        body.audience ||
+                        req.body?.audience ||
                         "all"
-
                     );
-
-
-                if (
-                    ![
-                        "all",
-                        "premium",
-                        "standard"
-                    ].includes(audience)
-                ) {
-
-                    return error(
-                        res,
-                        "Audience officielle invalide.",
-                        400
-                    );
-
-                }
 
 
                 const result =
                     await pool.query(
-
                         `
                         UPDATE messages
 
                         SET
-
-                            sender_type = 'admin',
-                            sender_email = $1,
+                            type = 'official',
+                            audience = $1,
 
                             recipient_user_id = NULL,
                             recipient_name = NULL,
                             recipient_email = NULL,
 
-                            type = 'official',
+                            updated_at = NOW()
 
-                            audience = $2,
-
-                            status = 'sent',
-                            read_at = NULL,
-
-                            updated_at =
-                                CURRENT_TIMESTAMP
-
-                        WHERE id = $3
+                        WHERE id = $2
 
                         RETURNING *
                         `,
-
                         [
-
-                            ADMIN_EMAIL,
-
                             audience,
-
                             id
-
                         ]
-
                     );
 
 
-                const converted =
-                    result.rows[0];
-
-
-                await safeMessageActivity(
-
-                    "MESSAGE_CONVERTI_OFFICIEL",
-
-                    `Message converti en communiqué — audience ${audience}`,
-
-                    null,
-
-                    id
-
-                );
+                const message =
+                    formatMessageForUser(
+                        result.rows[0]
+                    );
 
 
                 return res.json({
@@ -2756,129 +1886,93 @@ app.post(
                     success: true,
 
                     message:
-                        "Message converti en communiqué officiel.",
+                        "Message converti en annonce.",
 
                     data:
-                        converted
-
+                        message
                 });
-
             }
 
 
-            return error(
+            return res.status(400).json({
 
-                res,
+                success: false,
 
-                "Mode de conversion invalide. Utilisez user ou official.",
-
-                400
-
-            );
+                message:
+                    "Mode de conversion invalide."
+            });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
-                "POST /api/messages/:id/convert :",
-
-                err
-
+                "Conversion message :",
+                error
             );
 
+            return res.status(500).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible de convertir le message.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    "Impossible de convertir le message."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.13 ADMIN — SUPPRIMER MESSAGE
+   24.18 SUPPRIMER MESSAGE
 ============================================================ */
 
 app.delete(
-
     "/api/messages/:id",
-
     adminAuth,
-
-    async function(req, res) {
+    async (req, res) => {
 
         try {
 
             const id =
-                parseId(
+                getMessageId(
                     req.params.id
                 );
 
 
             if (!id) {
 
-                return error(
-                    res,
-                    "Identifiant de message invalide.",
-                    400
-                );
+                return res.status(400).json({
 
+                    success: false,
+
+                    message:
+                        "Identifiant invalide."
+                });
             }
 
 
             const existing =
-                await getCompleteMessageById(
-                    id
-                );
+                await getCompleteMessageById(id);
 
 
             if (!existing) {
 
-                return error(
-                    res,
-                    "Message introuvable.",
-                    404
-                );
+                return res.status(404).json({
 
+                    success: false,
+
+                    message:
+                        "Message introuvable."
+                });
             }
 
 
             await pool.query(
-
                 `
                 DELETE FROM messages
-
                 WHERE id = $1
                 `,
-
                 [id]
-
-            );
-
-
-            await safeMessageActivity(
-
-                "MESSAGE_SUPPRIME",
-
-                `Message ${id} supprimé`,
-
-                existing.recipient_user_id ||
-                    null,
-
-                id
-
             );
 
 
@@ -2887,73 +1981,54 @@ app.delete(
                 success: true,
 
                 message:
-                    "Message supprimé avec succès.",
-
-                data: {
-
-                    id
-
-                }
-
+                    "Message supprimé avec succès."
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
-                "DELETE /api/messages/:id :",
-
-                err
-
+                "DELETE message :",
+                error
             );
 
+            return res.status(500).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible de supprimer le message.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    "Impossible de supprimer le message."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.14 UTILISATEUR — SES MESSAGES
+   24.19 MESSAGES UTILISATEUR
 ============================================================ */
 
 app.get(
-
     "/api/utilisateurs/:id/messages",
-
-    async function(req, res) {
+    async (req, res) => {
 
         try {
 
             const userId =
-                parseId(
+                getMessageId(
                     req.params.id
                 );
 
 
             if (!userId) {
 
-                return error(
-                    res,
-                    "Identifiant utilisateur invalide.",
-                    400
-                );
+                return res.status(400).json({
 
+                    success: false,
+
+                    message:
+                        "Identifiant utilisateur invalide."
+                });
             }
 
 
@@ -2965,92 +2040,155 @@ app.get(
 
             if (!user) {
 
-                return error(
-                    res,
-                    "Utilisateur introuvable.",
-                    404
-                );
+                return res.status(404).json({
 
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable."
+                });
             }
 
 
             const premium =
-                isMessageUserPremium(
-                    user
-                );
+                messageUserIsPremium(user);
 
 
-            const audience =
-                premium
-                    ? "premium"
-                    : "standard";
-
+            /*
+             * IMPORTANT :
+             *
+             * On ne filtre PAS les annonces dans PostgreSQL
+             * avec le statut read.
+             *
+             * Le message existe une seule fois.
+             *
+             * On retourne les annonces correspondant
+             * au statut actuel de l'utilisateur.
+             */
 
             const result =
                 await pool.query(
-
                     `
                     SELECT
 
-                        m.*,
+                        m.id,
 
-                        CASE
+                        m.sender_type,
+                        m.sender_user_id,
+                        m.sender_name,
+                        m.sender_email,
 
-                            WHEN m.type = 'official'
-                            THEN 'BMJ SERVICE'
+                        m.recipient_user_id,
+                        m.recipient_name,
+                        m.recipient_email,
 
-                            ELSE
-                                COALESCE(
-                                    m.recipient_name,
-                                    u.nom,
-                                    'BMJ SERVICE'
-                                )
+                        m.subject,
+                        m.content,
 
-                        END AS display_sender
+                        m.type,
+                        m.priority,
+                        m.audience,
+
+                        m.status,
+                        m.read_at,
+
+                        m.created_at,
+                        m.updated_at
 
                     FROM messages m
 
-                    LEFT JOIN users u
-                        ON u.id =
-                           m.recipient_user_id
-
                     WHERE
 
+                        /*
+                         * MESSAGE PERSONNEL
+                         */
+                        m.recipient_user_id = $1
+
+                        OR
+
+                        /*
+                         * ANNONCE POUR TOUT LE MONDE
+                         */
                         (
-                            m.recipient_user_id = $1
+                            LOWER(
+                                COALESCE(
+                                    m.type,
+                                    ''
+                                )
+                            ) = 'official'
+
+                            AND
+
+                            LOWER(
+                                COALESCE(
+                                    m.audience,
+                                    ''
+                                )
+                            ) = 'all'
                         )
 
                         OR
 
+                        /*
+                         * ANNONCE STANDARD
+                         */
                         (
-                            m.type = 'official'
+                            LOWER(
+                                COALESCE(
+                                    m.type,
+                                    ''
+                                )
+                            ) = 'official'
 
                             AND
 
-                            (
-                                m.audience = 'all'
+                            LOWER(
+                                COALESCE(
+                                    m.audience,
+                                    ''
+                                )
+                            ) = 'standard'
 
-                                OR
-                                m.audience = $2
-                            )
+                            AND
+
+                            $2 = FALSE
+                        )
+
+                        OR
+
+                        /*
+                         * ANNONCE PREMIUM
+                         */
+                        (
+                            LOWER(
+                                COALESCE(
+                                    m.type,
+                                    ''
+                                )
+                            ) = 'official'
+
+                            AND
+
+                            LOWER(
+                                COALESCE(
+                                    m.audience,
+                                    ''
+                                )
+                            ) = 'premium'
+
+                            AND
+
+                            $2 = TRUE
                         )
 
                     ORDER BY
-
                         m.created_at DESC,
                         m.id DESC
-
-                    LIMIT 500
                     `,
-
                     [
-
                         userId,
-
-                        audience
-
+                        premium
                     ]
-
                 );
 
 
@@ -3059,237 +2197,67 @@ app.get(
                 success: true,
 
                 messages:
-                    result.rows,
+                    result.rows.map(
+                        formatMessageForUser
+                    ),
 
                 count:
-                    result.rows.length,
-
-                user: {
-
-                    id:
-                        user.id,
-
-                    nom:
-                        user.nom,
-
-                    premium
-
-                }
-
+                    result.rows.length
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
-                "GET /api/utilisateurs/:id/messages :",
-
-                err
-
+                "GET messages utilisateur :",
+                error
             );
 
+            return res.status(500).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible de récupérer vos messages.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    "Impossible de récupérer vos messages."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.15 UTILISATEUR — UN MESSAGE
+   24.20 MESSAGE UTILISATEUR PAR ID
 ============================================================ */
 
 app.get(
-
     "/api/utilisateurs/:userId/messages/:messageId",
-
-    async function(req, res) {
+    async (req, res) => {
 
         try {
 
             const userId =
-                parseId(
+                getMessageId(
                     req.params.userId
                 );
 
-
             const messageId =
-                parseId(
+                getMessageId(
                     req.params.messageId
                 );
-
-
-            if (!userId || !messageId) {
-
-                return error(
-                    res,
-                    "Identifiant invalide.",
-                    400
-                );
-
-            }
-
-
-            const user =
-                await getMessageUserById(
-                    userId
-                );
-
-
-            if (!user) {
-
-                return error(
-                    res,
-                    "Utilisateur introuvable.",
-                    404
-                );
-
-            }
-
-
-            const message =
-                await getCompleteMessageById(
-                    messageId
-                );
-
-
-            if (!message) {
-
-                return error(
-                    res,
-                    "Message introuvable.",
-                    404
-                );
-
-            }
-
-
-            const premium =
-                isMessageUserPremium(
-                    user
-                );
-
-
-            const visibleOfficial =
-                message.type === "official" &&
-                (
-                    message.audience === "all" ||
-                    (
-                        premium &&
-                        message.audience === "premium"
-                    ) ||
-                    (
-                        !premium &&
-                        message.audience === "standard"
-                    )
-                );
-
-
-            const ownMessage =
-                Number(
-                    message.recipient_user_id
-                ) === userId;
 
 
             if (
-                !ownMessage &&
-                !visibleOfficial
+                !userId ||
+                !messageId
             ) {
 
-                return error(
-                    res,
-                    "Ce message ne vous est pas destiné.",
-                    403
-                );
+                return res.status(400).json({
 
-            }
+                    success: false,
 
-
-            return res.json({
-
-                success: true,
-
-                message
-
-            });
-
-
-        } catch (err) {
-
-            console.error(
-
-                "GET message utilisateur :",
-
-                err
-
-            );
-
-
-            return error(
-
-                res,
-
-                "Impossible de récupérer le message.",
-
-                500,
-
-                err.message
-
-            );
-
-        }
-
-    }
-
-);
-
-
-/* ============================================================
-   24.16 UTILISATEUR — MARQUER MESSAGE COMME LU
-============================================================ */
-
-app.patch(
-
-    "/api/utilisateurs/:userId/messages/:messageId/read",
-
-    async function(req, res) {
-
-        try {
-
-            const userId =
-                parseId(
-                    req.params.userId
-                );
-
-
-            const messageId =
-                parseId(
-                    req.params.messageId
-                );
-
-
-            if (!userId || !messageId) {
-
-                return error(
-                    res,
-                    "Identifiant invalide.",
-                    400
-                );
-
+                    message:
+                        "Identifiant invalide."
+                });
             }
 
 
@@ -3301,92 +2269,119 @@ app.patch(
 
             if (!user) {
 
-                return error(
-                    res,
-                    "Utilisateur introuvable.",
-                    404
-                );
+                return res.status(404).json({
 
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable."
+                });
             }
 
 
             const premium =
-                isMessageUserPremium(
+                messageUserIsPremium(
                     user
                 );
-
-
-            const audience =
-                premium
-                    ? "premium"
-                    : "standard";
 
 
             const result =
                 await pool.query(
-
                     `
-                    UPDATE messages
+                    SELECT *
+                    FROM messages
 
-                    SET
+                    WHERE id = $1
 
-                        status = 'read',
+                    AND
+                    (
+                        recipient_user_id = $2
 
-                        read_at =
-                            COALESCE(
-                                read_at,
-                                CURRENT_TIMESTAMP
-                            ),
-
-                        updated_at =
-                            CURRENT_TIMESTAMP
-
-                    WHERE
-
-                        id = $1
-
-                        AND
+                        OR
 
                         (
-                            recipient_user_id = $2
-
-                            OR
-
-                            (
-                                type = 'official'
-
-                                AND
-                                (
-                                    audience = 'all'
-                                    OR audience = $3
+                            LOWER(
+                                COALESCE(
+                                    type,
+                                    ''
                                 )
-                            )
+                            ) = 'official'
+
+                            AND
+                            LOWER(
+                                COALESCE(
+                                    audience,
+                                    ''
+                                )
+                            ) = 'all'
                         )
 
-                    RETURNING *
+                        OR
+
+                        (
+                            LOWER(
+                                COALESCE(
+                                    type,
+                                    ''
+                                )
+                            ) = 'official'
+
+                            AND
+                            LOWER(
+                                COALESCE(
+                                    audience,
+                                    ''
+                                )
+                            ) = 'standard'
+
+                            AND
+                            $3 = FALSE
+                        )
+
+                        OR
+
+                        (
+                            LOWER(
+                                COALESCE(
+                                    type,
+                                    ''
+                                )
+                            ) = 'official'
+
+                            AND
+                            LOWER(
+                                COALESCE(
+                                    audience,
+                                    ''
+                                )
+                            ) = 'premium'
+
+                            AND
+                            $3 = TRUE
+                        )
+                    )
+
+                    LIMIT 1
                     `,
-
                     [
-
                         messageId,
-
                         userId,
-
-                        audience
-
+                        premium
                     ]
-
                 );
 
 
-            if (!result.rows.length) {
+            if (
+                result.rows.length === 0
+            ) {
 
-                return error(
-                    res,
-                    "Message introuvable ou non autorisé.",
-                    404
-                );
+                return res.status(404).json({
 
+                    success: false,
+
+                    message:
+                        "Message introuvable."
+                });
             }
 
 
@@ -3395,110 +2390,246 @@ app.patch(
                 success: true,
 
                 message:
-                    "Message marqué comme lu.",
-
-                data:
-                    result.rows[0]
-
+                    formatMessageForUser(
+                        result.rows[0]
+                    )
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
-                "PATCH message read :",
-
-                err
-
+                "GET message utilisateur :",
+                error
             );
 
+            return res.status(500).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible de marquer le message comme lu.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    "Impossible de récupérer le message."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.17 COMPATIBILITÉ — MARQUER LU
+   24.21 MARQUER MESSAGE COMME LU
 ============================================================ */
 
 app.patch(
-
-    "/api/messages/:id/read",
-
-    async function(req, res) {
+    "/api/utilisateurs/:userId/messages/:messageId/read",
+    async (req, res) => {
 
         try {
 
-            const id =
-                parseId(
-                    req.params.id
+            const userId =
+                getMessageId(
+                    req.params.userId
+                );
+
+            const messageId =
+                getMessageId(
+                    req.params.messageId
                 );
 
 
-            if (!id) {
+            if (
+                !userId ||
+                !messageId
+            ) {
 
-                return error(
-                    res,
-                    "Identifiant invalide.",
-                    400
-                );
+                return res.status(400).json({
 
+                    success: false,
+
+                    message:
+                        "Identifiant invalide."
+                });
             }
 
 
             const result =
                 await pool.query(
-
                     `
                     UPDATE messages
 
                     SET
-
                         status = 'read',
+                        read_at = NOW(),
+                        updated_at = NOW()
 
-                        read_at =
-                            COALESCE(
-                                read_at,
-                                CURRENT_TIMESTAMP
-                            ),
+                    WHERE
+                        id = $1
 
-                        updated_at =
-                            CURRENT_TIMESTAMP
+                        AND
+                        recipient_user_id = $2
+
+                    RETURNING *
+                    `,
+                    [
+                        messageId,
+                        userId
+                    ]
+                );
+
+
+            /*
+             * Message personnel.
+             */
+
+            if (
+                result.rows.length > 0
+            ) {
+
+                return res.json({
+
+                    success: true,
+
+                    message:
+                        "Message marqué comme lu.",
+
+                    data:
+                        formatMessageForUser(
+                            result.rows[0]
+                        )
+                });
+            }
+
+
+            /*
+             * Annonce officielle.
+             *
+             * On confirme simplement la lecture.
+             *
+             * La vraie lecture indépendante
+             * par utilisateur sera gérée ensuite
+             * avec message_reads.
+             */
+
+            const official =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM messages
+
+                    WHERE id = $1
+
+                    AND LOWER(
+                        COALESCE(
+                            type,
+                            ''
+                        )
+                    ) = 'official'
+
+                    LIMIT 1
+                    `,
+                    [messageId]
+                );
+
+
+            if (
+                official.rows.length > 0
+            ) {
+
+                return res.json({
+
+                    success: true,
+
+                    message:
+                        "Annonce ouverte."
+                });
+            }
+
+
+            return res.status(404).json({
+
+                success: false,
+
+                message:
+                    "Message introuvable."
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "PATCH message read :",
+                error
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de marquer le message comme lu."
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   24.22 COMPATIBILITÉ
+   PATCH /api/messages/:id/read
+============================================================ */
+
+app.patch(
+    "/api/messages/:id/read",
+    async (req, res) => {
+
+        try {
+
+            const messageId =
+                getMessageId(
+                    req.params.id
+                );
+
+
+            if (!messageId) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant message invalide."
+                });
+            }
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE messages
+
+                    SET
+                        status = 'read',
+                        read_at = NOW(),
+                        updated_at = NOW()
 
                     WHERE id = $1
 
                     RETURNING *
                     `,
-
-                    [id]
-
+                    [messageId]
                 );
 
 
-            if (!result.rows.length) {
+            if (
+                result.rows.length === 0
+            ) {
 
-                return error(
-                    res,
-                    "Message introuvable.",
-                    404
-                );
+                return res.status(404).json({
 
+                    success: false,
+
+                    message:
+                        "Message introuvable."
+                });
             }
 
 
@@ -3510,684 +2641,461 @@ app.patch(
                     "Message marqué comme lu.",
 
                 data:
-                    result.rows[0]
-
+                    formatMessageForUser(
+                        result.rows[0]
+                    )
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
                 "PATCH /api/messages/:id/read :",
-
-                err
-
+                error
             );
 
+            return res.status(500).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible de marquer le message comme lu.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    "Impossible de modifier le message."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.18 UTILISATEUR — RÉPONDRE
+   24.23 TRAITEMENT RÉPONSE UTILISATEUR
 ============================================================ */
 
 async function processUserMessageReply(
-
     userId,
-
     messageId,
-
     content
-
 ) {
+
+    const id =
+        getMessageId(userId);
+
+    const originalId =
+        getMessageId(messageId);
+
+    const text =
+        cleanMessageText(
+            content,
+            5000
+        );
+
+
+    if (!id) {
+
+        throw new Error(
+            "Utilisateur invalide."
+        );
+    }
+
+
+    if (!originalId) {
+
+        throw new Error(
+            "Message invalide."
+        );
+    }
+
+
+    if (!text) {
+
+        throw new Error(
+            "La réponse ne peut pas être vide."
+        );
+    }
+
 
     const user =
         await getMessageUserById(
-            userId
+            id
         );
 
 
     if (!user) {
 
-        return {
-
-            status: 404,
-
-            error:
-                "Utilisateur introuvable."
-
-        };
-
+        throw new Error(
+            "Utilisateur introuvable."
+        );
     }
 
 
+    /*
+     * IMPORTANT :
+     *
+     * L'utilisateur ne peut répondre
+     * qu'à un message qui lui appartient.
+     */
+
+    const originalResult =
+        await pool.query(
+            `
+            SELECT *
+            FROM messages
+
+            WHERE
+                id = $1
+
+                AND
+                recipient_user_id = $2
+
+            LIMIT 1
+            `,
+            [
+                originalId,
+                id
+            ]
+        );
+
+
     if (
-        user.blocked === true ||
-        user.is_blocked === true
+        originalResult.rows.length === 0
     ) {
 
-        return {
-
-            status: 403,
-
-            error:
-                "Votre compte est bloqué."
-
-        };
-
+        throw new Error(
+            "Vous ne pouvez pas répondre à ce message."
+        );
     }
 
 
     const original =
-        await getCompleteMessageById(
-            messageId
-        );
-
-
-    if (!original) {
-
-        return {
-
-            status: 404,
-
-            error:
-                "Message introuvable."
-
-        };
-
-    }
+        originalResult.rows[0];
 
 
     /*
-       Impossible de répondre à un communiqué.
-    */
+     * Interdire réponse aux annonces.
+     */
 
     if (
-        original.type === "official"
-    ) {
-
-        return {
-
-            status: 403,
-
-            error:
-                "Vous ne pouvez pas répondre à un communiqué officiel."
-
-        };
-
-    }
-
-
-    /*
-       Seuls les messages envoyés par l'administration
-       à cet utilisateur peuvent recevoir une réponse.
-    */
-
-    if (
-        original.type !== "user"
-    ) {
-
-        return {
-
-            status: 403,
-
-            error:
-                "Ce message ne peut pas recevoir de réponse."
-
-        };
-
-    }
-
-
-    if (
-        original.sender_type !== "admin"
-    ) {
-
-        return {
-
-            status: 403,
-
-            error:
-                "Ce message n'accepte pas de réponse."
-
-        };
-
-    }
-
-
-    if (
-        Number(
-            original.recipient_user_id
-        ) !==
-        Number(user.id)
-    ) {
-
-        return {
-
-            status: 403,
-
-            error:
-                "Ce message ne vous est pas destiné."
-
-        };
-
-    }
-
-
-    const cleanContent =
         String(
-            content || ""
-        ).trim();
-
-
-    if (!cleanContent) {
-
-        return {
-
-            status: 400,
-
-            error:
-                "La réponse ne peut pas être vide."
-
-        };
-
-    }
-
-
-    if (
-        cleanContent.length > 10000
+            original.type || ""
+        ).toLowerCase() === "official"
     ) {
 
-        return {
-
-            status: 400,
-
-            error:
-                "La réponse est trop longue."
-
-        };
-
+        throw new Error(
+            "Les annonces officielles ne peuvent pas recevoir de réponse."
+        );
     }
 
+
+    /*
+     * Interdire réponse à une réponse.
+     */
+
+    if (
+        String(
+            original.type || ""
+        ).toLowerCase() === "user_reply"
+    ) {
+
+        throw new Error(
+            "Vous ne pouvez pas répondre à cette réponse."
+        );
+    }
+
+
+    /*
+     * Vérifier que le message vient bien
+     * de l'administration.
+     */
+
+    if (
+        String(
+            original.sender_type || ""
+        ).toLowerCase() !== "admin"
+    ) {
+
+        throw new Error(
+            "Ce message ne peut pas recevoir de réponse."
+        );
+    }
+
+
+    /*
+     * Insérer la réponse.
+     */
 
     const result =
         await pool.query(
-
             `
-            INSERT INTO messages
-            (
+            INSERT INTO messages (
+
                 sender_type,
+                sender_user_id,
+                sender_name,
                 sender_email,
 
                 recipient_user_id,
                 recipient_name,
                 recipient_email,
 
-                type,
-
                 subject,
                 content,
 
+                type,
                 priority,
-                status,
                 audience,
 
-                read_at,
+                status,
 
                 created_at,
                 updated_at
+
             )
 
-            VALUES
-            (
+            VALUES (
+
                 'user',
                 $1,
-
                 $2,
                 $3,
-                $4,
 
-                'user_reply',
+                $1,
+                'BMJ SERVICE',
+                $4,
 
                 $5,
                 $6,
 
-                $7,
-                'sent',
+                'user_reply',
+                'normal',
                 'admin',
 
-                NULL,
+                'unread',
 
-                CURRENT_TIMESTAMP,
-                CURRENT_TIMESTAMP
+                NOW(),
+                NOW()
             )
 
             RETURNING *
             `,
-
             [
+
+                user.id,
+
+                user.nom ||
+                    "Utilisateur",
 
                 user.email ||
                     "",
 
-                user.id,
+                getAdminEmail(),
 
-                "BMJ SERVICE",
+                `Réponse : ${
+                    original.subject ||
+                    "Message"
+                }`,
 
-                ADMIN_EMAIL,
-
-                `Réponse : ${original.subject || "Message"}`,
-
-                cleanContent,
-
-                original.priority ||
-                    "normal"
-
+                text
             ]
-
         );
 
 
     const reply =
-        result.rows[0];
+        formatMessageForUser(
+            result.rows[0]
+        );
 
 
-    await safeMessageActivity(
-
-        "REPONSE_UTILISATEUR",
-
-        `Réponse reçue de ${user.nom || user.email || user.id} au message ${original.id}`,
-
-        user.id,
-
-        reply.id
-
-    );
-
-
-    return {
-
-        status: 201,
-
-        data:
-            reply
-
-    };
-
+    return reply;
 }
 
 
 /* ============================================================
-   24.19 UTILISATEUR — RÉPONDRE AVEC URL PRINCIPALE
+   24.24 RÉPONSE /repondre
 ============================================================ */
 
 app.post(
-
     "/api/utilisateurs/:userId/messages/:messageId/repondre",
-
-    async function(req, res) {
+    async (req, res) => {
 
         try {
 
-            const userId =
-                parseId(
-                    req.params.userId
-                );
-
-
-            const messageId =
-                parseId(
-                    req.params.messageId
-                );
-
-
-            const content =
-                req.body?.content ??
-                req.body?.message ??
-                "";
-
-
-            if (!userId || !messageId) {
-
-                return error(
-                    res,
-                    "Identifiant invalide.",
-                    400
-                );
-
-            }
-
-
-            const result =
+            const reply =
                 await processUserMessageReply(
-
-                    userId,
-
-                    messageId,
-
-                    content
-
+                    req.params.userId,
+                    req.params.messageId,
+                    req.body?.content
                 );
 
 
-            if (result.error) {
-
-                return error(
-
-                    res,
-
-                    result.error,
-
-                    result.status
-
-                );
-
-            }
-
-
-            return res.status(
-                result.status
-            ).json({
+            return res.status(201).json({
 
                 success: true,
 
                 message:
-                    "Réponse envoyée avec succès.",
+                    "Votre réponse a été envoyée.",
 
                 data:
-                    result.data
-
+                    reply
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
-                "POST réponse utilisateur :",
-
-                err
-
+                "POST /repondre :",
+                error
             );
 
+            return res.status(400).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible d'envoyer votre réponse.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    error.message ||
+                    "Impossible d'envoyer votre réponse."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.20 COMPATIBILITÉ — RÉPONSE UTILISATEUR
+   24.25 RÉPONSE /reply
+   COMPATIBILITÉ AVEC TON SCRIPT ACTUEL
 ============================================================ */
 
 app.post(
-
-    "/api/messages/reply",
-
-    async function(req, res) {
+    "/api/utilisateurs/:userId/messages/:messageId/reply",
+    async (req, res) => {
 
         try {
 
-            const userId =
-                parseId(
-
-                    req.body?.user_id
-
-                );
-
-
-            const messageId =
-                parseId(
-
-                    req.body?.message_id
-
-                );
-
-
-            const content =
-                req.body?.content ??
-                req.body?.message ??
-                "";
-
-
-            if (!userId || !messageId) {
-
-                return error(
-                    res,
-                    "Utilisateur ou message invalide.",
-                    400
-                );
-
-            }
-
-
-            const result =
+            const reply =
                 await processUserMessageReply(
-
-                    userId,
-
-                    messageId,
-
-                    content
-
+                    req.params.userId,
+                    req.params.messageId,
+                    req.body?.content
                 );
 
 
-            if (result.error) {
-
-                return error(
-
-                    res,
-
-                    result.error,
-
-                    result.status
-
-                );
-
-            }
-
-
-            return res.status(
-                result.status
-            ).json({
+            return res.status(201).json({
 
                 success: true,
 
                 message:
-                    "Réponse envoyée avec succès.",
+                    "Votre réponse a été envoyée.",
 
                 data:
-                    result.data
-
+                    reply
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
-
-                "POST /api/messages/reply :",
-
-                err
-
+                "POST /reply :",
+                error
             );
 
+            return res.status(400).json({
 
-            return error(
+                success: false,
 
-                res,
-
-                "Impossible d'envoyer la réponse.",
-
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    error.message ||
+                    "Impossible d'envoyer votre réponse."
+            });
         }
-
     }
-
 );
 
 
 /* ============================================================
-   24.21 ADMIN — VOIR UNIQUEMENT LES RÉPONSES UTILISATEURS
+   24.26 COMPATIBILITÉ
+   POST /api/messages/reply
 ============================================================ */
 
-app.get(
-
-    "/api/messages/reponses",
-
-    adminAuth,
-
-    async function(req, res) {
-
-        try {
-
-            const result =
-                await pool.query(
-
-                    `
-                    SELECT
-
-                        m.*,
-
-                        u.nom AS user_nom_db,
-                        u.email AS user_email_db,
-                        u.telephone AS user_telephone_db,
-
-                        u.premium AS user_premium_db,
-                        u.is_premium AS user_is_premium_db
-
-                    FROM messages m
-
-                    LEFT JOIN users u
-                        ON u.id =
-                           m.recipient_user_id
-
-                    WHERE m.type =
-                          'user_reply'
-
-                    ORDER BY
-
-                        m.created_at DESC,
-                        m.id DESC
-
-                    LIMIT 1000
-                    `
-
-                );
-
-
-            return res.json({
-
-                success: true,
-
-                messages:
-                    result.rows,
-
-                responses:
-                    result.rows,
-
-                count:
-                    result.rows.length
-
-            });
-
-
-        } catch (err) {
-
-            console.error(
-
-                "GET /api/messages/reponses :",
-
-                err
-
-            );
-
-
-            return error(
-
-                res,
-
-                "Impossible de récupérer les réponses utilisateurs.",
-
-                500,
-
-                err.message
-
-            );
-
-        }
-
-    }
-
-);
-
-
-/* ============================================================
-   24.22 ADMIN — VOIR LES MESSAGES D'UN UTILISATEUR
-============================================================ */
-
-app.get(
-
-    "/api/admin/messages/user/:userId",
-
-    adminAuth,
-
-    async function(req, res) {
+app.post(
+    "/api/messages/reply",
+    async (req, res) => {
 
         try {
 
             const userId =
-                parseId(
+                req.body?.user_id ||
+                req.body?.userId;
+
+
+            const messageId =
+                req.body?.message_id ||
+                req.body?.messageId;
+
+
+            const reply =
+                await processUserMessageReply(
+                    userId,
+                    messageId,
+                    req.body?.content
+                );
+
+
+            return res.status(201).json({
+
+                success: true,
+
+                message:
+                    "Votre réponse a été envoyée.",
+
+                data:
+                    reply
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "POST /api/messages/reply :",
+                error
+            );
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    error.message ||
+                    "Impossible d'envoyer votre réponse."
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   24.27 CONVERSATION ADMIN / UTILISATEUR
+============================================================ */
+
+app.get(
+    "/api/admin/messages/user/:userId",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const userId =
+                getMessageId(
                     req.params.userId
                 );
 
 
             if (!userId) {
 
-                return error(
-                    res,
-                    "Identifiant utilisateur invalide.",
-                    400
-                );
+                return res.status(400).json({
 
+                    success: false,
+
+                    message:
+                        "Utilisateur invalide."
+                });
             }
 
 
@@ -4199,49 +3107,54 @@ app.get(
 
             if (!user) {
 
-                return error(
-                    res,
-                    "Utilisateur introuvable.",
-                    404
-                );
+                return res.status(404).json({
 
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable."
+                });
             }
 
 
             const result =
                 await pool.query(
-
                     `
                     SELECT *
 
                     FROM messages
 
                     WHERE
+
+                        /*
+                         * Messages envoyés à l'utilisateur
+                         */
                         recipient_user_id = $1
 
                         OR
 
+                        /*
+                         * Réponses envoyées
+                         * par cet utilisateur à l'administration.
+                         */
                         (
-                            sender_type = 'user'
+                            sender_user_id = $1
+
                             AND
-                            recipient_email =
-                                $2
+
+                            LOWER(
+                                COALESCE(
+                                    sender_type,
+                                    ''
+                                )
+                            ) = 'user'
                         )
 
                     ORDER BY
-
                         created_at ASC,
                         id ASC
                     `,
-
-                    [
-
-                        userId,
-
-                        ADMIN_EMAIL
-
-                    ]
-
+                    [userId]
                 );
 
 
@@ -4249,77 +3162,250 @@ app.get(
 
                 success: true,
 
-                user: {
-
-                    id:
-                        user.id,
-
-                    nom:
-                        user.nom,
-
-                    email:
-                        user.email,
-
-                    premium:
-                        isMessageUserPremium(
-                            user
-                        )
-
-                },
+                user,
 
                 messages:
                     result.rows,
 
                 count:
                     result.rows.length
-
             });
 
 
-        } catch (err) {
+        } catch (error) {
 
             console.error(
+                "Conversation admin utilisateur :",
+                error
+            );
 
-                "GET messages utilisateur admin :",
+            return res.status(500).json({
 
-                err
+                success: false,
 
+                message:
+                    "Impossible de récupérer la conversation."
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   24.28 SSE
+   MESSAGERIE INSTANTANÉE
+============================================================ */
+
+app.get(
+    "/api/utilisateurs/:userId/messages/stream",
+    async (req, res) => {
+
+        const userId =
+            getMessageId(
+                req.params.userId
             );
 
 
-            return error(
+        if (!userId) {
 
-                res,
+            return res.status(400).json({
 
-                "Impossible de récupérer la conversation.",
+                success: false,
 
-                500,
-
-                err.message
-
-            );
-
+                message:
+                    "Utilisateur invalide."
+            });
         }
 
-    }
 
+        try {
+
+            /*
+             * Vérifier utilisateur.
+             */
+
+            const user =
+                await getMessageUserById(
+                    userId
+                );
+
+
+            if (!user) {
+
+                return res.status(404).end();
+            }
+
+
+            /*
+             * Headers SSE.
+             */
+
+            res.status(200);
+
+            res.setHeader(
+                "Content-Type",
+                "text/event-stream"
+            );
+
+            res.setHeader(
+                "Cache-Control",
+                "no-cache, no-transform"
+            );
+
+            res.setHeader(
+                "Connection",
+                "keep-alive"
+            );
+
+            res.setHeader(
+                "X-Accel-Buffering",
+                "no"
+            );
+
+
+            if (
+                typeof res.flushHeaders ===
+                "function"
+            ) {
+
+                res.flushHeaders();
+            }
+
+
+            /*
+             * Enregistrer le navigateur.
+             */
+
+            if (
+                !messageSSEClients.has(
+                    userId
+                )
+            ) {
+
+                messageSSEClients.set(
+                    userId,
+                    new Set()
+                );
+            }
+
+
+            const clients =
+                messageSSEClients.get(
+                    userId
+                );
+
+
+            clients.add(res);
+
+
+            /*
+             * Confirmation immédiate.
+             */
+
+            res.write(
+                "event: connected\n"
+            );
+
+            res.write(
+                `data: ${JSON.stringify({
+                    success: true,
+                    user_id: userId
+                })}\n\n`
+            );
+
+
+            /*
+             * Keep-alive.
+             */
+
+            const heartbeat =
+                setInterval(
+                    () => {
+
+                        try {
+
+                            res.write(
+                                `: heartbeat ${Date.now()}\n\n`
+                            );
+
+                        } catch {
+
+                            clearInterval(
+                                heartbeat
+                            );
+
+                            clients.delete(
+                                res
+                            );
+                        }
+
+                    },
+                    20000
+                );
+
+
+            /*
+             * Fermeture connexion.
+             */
+
+            req.on(
+                "close",
+                () => {
+
+                    clearInterval(
+                        heartbeat
+                    );
+
+
+                    clients.delete(
+                        res
+                    );
+
+
+                    if (
+                        clients.size === 0
+                    ) {
+
+                        messageSSEClients.delete(
+                            userId
+                        );
+                    }
+                }
+            );
+
+
+        } catch (error) {
+
+            console.error(
+                "SSE messagerie :",
+                error
+            );
+
+            try {
+                res.end();
+            } catch {}
+        }
+    }
 );
 
 
 /* ============================================================
-   24.23 ADMIN — SUPPRIMER UNE RÉPONSE
-   Même route DELETE que les autres messages.
+   24.29 INITIALISATION
 ============================================================ */
 
+initializeMessageDatabase()
+    .catch(error => {
 
-/* ============================================================
-   24.24 ROUTES MESSAGERIE
-============================================================ */
+        console.error(
+            "❌ Erreur initialisation messagerie :",
+            error
+        );
+    });
+
 
 console.log(
-    "✓ Nouvelle messagerie BMJ SERVICE chargée."
+    "✓ Messagerie BMJ SERVICE chargée."
 );
-
 /* ============================================================
    25. DASHBOARD ADMIN
 ============================================================ */
