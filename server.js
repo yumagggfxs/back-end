@@ -2897,11 +2897,6 @@ app.get(
 
 
 /* ============================================================
-   24. MESSAGES
-============================================================ */
-
-
-/* ============================================================
    24. MESSAGERIE BMJ SERVICE
 ============================================================ */
 
@@ -2978,12 +2973,13 @@ app.get(
                 `
             );
 
-
             return res.json({
-                success: true,
-                messages: result.rows
-            });
 
+                success: true,
+
+                messages: result.rows
+
+            });
 
         } catch (err) {
 
@@ -3024,7 +3020,6 @@ app.get(
             const id =
                 parseId(req.params.id);
 
-
             if (!id) {
 
                 return res.status(400).json({
@@ -3038,7 +3033,6 @@ app.get(
 
             }
 
-
             const result = await pool.query(
                 `
                 SELECT
@@ -3046,7 +3040,10 @@ app.get(
 
                     u.nom AS user_nom_db,
                     u.email AS user_email_db,
-                    u.telephone AS user_telephone_db
+                    u.telephone AS user_telephone_db,
+
+                    u.premium AS user_premium_db,
+                    u.is_premium AS user_is_premium_db
 
                 FROM messages m
 
@@ -3059,7 +3056,6 @@ app.get(
                 `,
                 [id]
             );
-
 
             if (!result.rows.length) {
 
@@ -3074,7 +3070,6 @@ app.get(
 
             }
 
-
             return res.json({
 
                 success: true,
@@ -3083,7 +3078,6 @@ app.get(
                     result.rows[0]
 
             });
-
 
         } catch (err) {
 
@@ -3124,19 +3118,16 @@ app.post(
             const body =
                 req.body || {};
 
-
             const userId =
                 parseId(
                     body.user_id ||
                     body.recipient_id
                 );
 
-
             const subject =
                 String(
                     body.subject || ""
                 ).trim();
-
 
             const content =
                 String(
@@ -3145,7 +3136,6 @@ app.post(
                     ""
                 ).trim();
 
-
             const priorityRaw =
                 String(
                     body.priority ||
@@ -3153,7 +3143,6 @@ app.post(
                 )
                 .trim()
                 .toLowerCase();
-
 
             const priority =
                 [
@@ -3234,6 +3223,12 @@ app.post(
 
             }
 
+
+            /*
+             * IMPORTANT :
+             * Le serveur récupère directement
+             * l'utilisateur ici.
+             */
 
             const user =
                 await getUserById(userId);
@@ -3322,7 +3317,7 @@ app.post(
             );
 
 
-            return res.json({
+            return res.status(201).json({
 
                 success: true,
 
@@ -3547,7 +3542,7 @@ app.post(
             );
 
 
-            return res.json({
+            return res.status(201).json({
 
                 success: true,
 
@@ -3586,7 +3581,764 @@ app.post(
 
 
 /* ============================================================
-   24.6 — UTILISATEUR : RÉCUPÉRER SES MESSAGES
+   24.6 — ADMIN : MODIFIER / CONVERTIR UN MESSAGE
+============================================================ */
+
+/*
+ * Cette route permet :
+ *
+ * - modifier un message individuel
+ * - changer son destinataire
+ * - modifier sujet/contenu/priorité
+ * - transformer individuel → officiel
+ * - transformer officiel → individuel
+ * - changer l'audience d'une annonce officielle
+ *
+ * Exemple individuel :
+ *
+ * {
+ *   type: "user",
+ *   user_id: 15,
+ *   subject: "Nouveau sujet",
+ *   content: "Nouveau contenu",
+ *   priority: "important"
+ * }
+ *
+ * Exemple officiel :
+ *
+ * {
+ *   type: "official",
+ *   audience: "all",
+ *   subject: "Annonce",
+ *   content: "Contenu",
+ *   priority: "normal"
+ * }
+ */
+
+app.patch(
+    "/api/messages/:id",
+    adminAuth,
+    async function (req, res) {
+
+        try {
+
+            const messageId =
+                parseId(req.params.id);
+
+
+            if (!messageId) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant du message invalide."
+
+                });
+
+            }
+
+
+            const existing =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM messages
+                    WHERE id = $1
+                    LIMIT 1
+                    `,
+                    [messageId]
+                );
+
+
+            if (!existing.rows.length) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Message introuvable."
+
+                });
+
+            }
+
+
+            const oldMessage =
+                existing.rows[0];
+
+
+            const body =
+                req.body || {};
+
+
+            const typeRaw =
+                String(
+                    body.type ||
+                    (
+                        oldMessage.type ===
+                        "official"
+                            ? "official"
+                            : "user"
+                    )
+                )
+                .trim()
+                .toLowerCase();
+
+
+            const type =
+                typeRaw === "official"
+                    ? "official"
+                    : "user";
+
+
+            const subject =
+                String(
+                    body.subject !== undefined
+                        ? body.subject
+                        : oldMessage.subject || ""
+                ).trim();
+
+
+            const content =
+                String(
+                    body.content !== undefined
+                        ? body.content
+                        : oldMessage.content || ""
+                ).trim();
+
+
+            const priorityRaw =
+                String(
+                    body.priority !== undefined
+                        ? body.priority
+                        : oldMessage.priority || "normal"
+                )
+                .trim()
+                .toLowerCase();
+
+
+            const priority =
+                [
+                    "normal",
+                    "important",
+                    "urgent"
+                ].includes(priorityRaw)
+                    ? priorityRaw
+                    : "normal";
+
+
+            if (!subject) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le sujet est obligatoire."
+
+                });
+
+            }
+
+
+            if (subject.length > 500) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le sujet est trop long."
+
+                });
+
+            }
+
+
+            if (!content) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le contenu est obligatoire."
+
+                });
+
+            }
+
+
+            if (content.length > 5000) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le message est trop long."
+
+                });
+
+            }
+
+
+            /* =================================================
+               CAS 1 — MESSAGE INDIVIDUEL
+            ================================================= */
+
+            if (type === "user") {
+
+                const userId =
+                    parseId(
+                        body.user_id ||
+                        body.recipient_id ||
+                        oldMessage.recipient_user_id
+                    );
+
+
+                if (!userId) {
+
+                    return res.status(400).json({
+
+                        success: false,
+
+                        message:
+                            "Veuillez sélectionner un utilisateur."
+
+                    });
+
+                }
+
+
+                const user =
+                    await getUserById(userId);
+
+
+                if (!user) {
+
+                    return res.status(404).json({
+
+                        success: false,
+
+                        message:
+                            "Utilisateur introuvable."
+
+                    });
+
+                }
+
+
+                const result =
+                    await pool.query(
+                        `
+                        UPDATE messages
+
+                        SET
+
+                            recipient_user_id = $1,
+
+                            recipient_name = $2,
+
+                            recipient_email = $3,
+
+                            type = 'user',
+
+                            subject = $4,
+
+                            content = $5,
+
+                            priority = $6,
+
+                            audience = 'individual',
+
+                            status = 'sent',
+
+                            read_at = NULL,
+
+                            updated_at =
+                                CURRENT_TIMESTAMP
+
+                        WHERE id = $7
+
+                        RETURNING *
+                        `,
+                        [
+
+                            user.id,
+                            user.nom,
+                            user.email,
+
+                            subject,
+                            content,
+                            priority,
+
+                            messageId
+
+                        ]
+                    );
+
+
+                await logActivity(
+
+                    "MODIFICATION_MESSAGE",
+
+                    `Message #${messageId} modifié et destiné à ${user.email}`,
+
+                    user.id
+
+                );
+
+
+                return res.json({
+
+                    success: true,
+
+                    message:
+                        "Message individuel modifié avec succès.",
+
+                    data:
+                        result.rows[0]
+
+                });
+
+            }
+
+
+            /* =================================================
+               CAS 2 — MESSAGE OFFICIEL
+            ================================================= */
+
+            let audienceRaw =
+                String(
+                    body.audience !== undefined
+                        ? body.audience
+                        : oldMessage.audience || "all"
+                )
+                .trim()
+                .toLowerCase();
+
+
+            const audience =
+                [
+                    "all",
+                    "premium",
+                    "standard"
+                ].includes(audienceRaw)
+                    ? audienceRaw
+                    : "all";
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE messages
+
+                    SET
+
+                        recipient_user_id = NULL,
+
+                        recipient_name = NULL,
+
+                        recipient_email = NULL,
+
+                        type = 'official',
+
+                        subject = $1,
+
+                        content = $2,
+
+                        priority = $3,
+
+                        audience = $4,
+
+                        status = 'sent',
+
+                        read_at = NULL,
+
+                        updated_at =
+                            CURRENT_TIMESTAMP
+
+                    WHERE id = $5
+
+                    RETURNING *
+                    `,
+                    [
+
+                        subject,
+                        content,
+                        priority,
+                        audience,
+
+                        messageId
+
+                    ]
+                );
+
+
+            await logActivity(
+
+                "MODIFICATION_MESSAGE_OFFICIEL",
+
+                `Annonce officielle #${messageId} modifiée — audience : ${audience}`
+
+            );
+
+
+            return res.json({
+
+                success: true,
+
+                message:
+                    "Annonce officielle modifiée avec succès.",
+
+                data:
+                    result.rows[0]
+
+            });
+
+
+        } catch (err) {
+
+            console.error(
+                "PATCH /api/messages/:id :",
+                err
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de modifier le message.",
+
+                error:
+                    err.message
+
+            });
+
+        }
+
+    }
+);
+
+
+/* ============================================================
+   24.7 — CONVERSION RAPIDE D'UN MESSAGE
+============================================================ */
+
+/*
+ * Cette route est également disponible si ton interface
+ * d'administration veut simplement convertir un message
+ * sans modifier son contenu.
+ *
+ * mode = "user"
+ * mode = "official"
+ */
+
+app.post(
+    "/api/messages/:id/convert",
+    adminAuth,
+    async function (req, res) {
+
+        try {
+
+            const messageId =
+                parseId(req.params.id);
+
+
+            if (!messageId) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant du message invalide."
+
+                });
+
+            }
+
+
+            const mode =
+                String(
+                    req.body?.mode || ""
+                )
+                .trim()
+                .toLowerCase();
+
+
+            if (
+                mode !== "user" &&
+                mode !== "official"
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Mode de conversion invalide."
+
+                });
+
+            }
+
+
+            const existing =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM messages
+                    WHERE id = $1
+                    LIMIT 1
+                    `,
+                    [messageId]
+                );
+
+
+            if (!existing.rows.length) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Message introuvable."
+
+                });
+
+            }
+
+
+            const message =
+                existing.rows[0];
+
+
+            /* =================================================
+               OFFICIEL → UTILISATEUR
+            ================================================= */
+
+            if (mode === "user") {
+
+                const userId =
+                    parseId(
+                        req.body?.user_id ||
+                        req.body?.recipient_id
+                    );
+
+
+                if (!userId) {
+
+                    return res.status(400).json({
+
+                        success: false,
+
+                        message:
+                            "Veuillez sélectionner un utilisateur."
+
+                    });
+
+                }
+
+
+                const user =
+                    await getUserById(userId);
+
+
+                if (!user) {
+
+                    return res.status(404).json({
+
+                        success: false,
+
+                        message:
+                            "Utilisateur introuvable."
+
+                    });
+
+                }
+
+
+                const result =
+                    await pool.query(
+                        `
+                        UPDATE messages
+
+                        SET
+
+                            recipient_user_id = $1,
+
+                            recipient_name = $2,
+
+                            recipient_email = $3,
+
+                            type = 'user',
+
+                            audience = 'individual',
+
+                            status = 'sent',
+
+                            read_at = NULL,
+
+                            updated_at =
+                                CURRENT_TIMESTAMP
+
+                        WHERE id = $4
+
+                        RETURNING *
+                        `,
+                        [
+
+                            user.id,
+                            user.nom,
+                            user.email,
+
+                            messageId
+
+                        ]
+                    );
+
+
+                await logActivity(
+
+                    "CONVERSION_MESSAGE_UTILISATEUR",
+
+                    `Message #${messageId} converti en message individuel pour ${user.email}`,
+
+                    user.id
+
+                );
+
+
+                return res.json({
+
+                    success: true,
+
+                    message:
+                        "Le message a été envoyé à cet utilisateur.",
+
+                    data:
+                        result.rows[0]
+
+                });
+
+            }
+
+
+            /* =================================================
+               UTILISATEUR → OFFICIEL
+            ================================================= */
+
+            const audienceRaw =
+                String(
+                    req.body?.audience ||
+                    "all"
+                )
+                .trim()
+                .toLowerCase();
+
+
+            const audience =
+                [
+                    "all",
+                    "premium",
+                    "standard"
+                ].includes(audienceRaw)
+                    ? audienceRaw
+                    : "all";
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE messages
+
+                    SET
+
+                        recipient_user_id = NULL,
+
+                        recipient_name = NULL,
+
+                        recipient_email = NULL,
+
+                        type = 'official',
+
+                        audience = $1,
+
+                        status = 'sent',
+
+                        read_at = NULL,
+
+                        updated_at =
+                            CURRENT_TIMESTAMP
+
+                    WHERE id = $2
+
+                    RETURNING *
+                    `,
+                    [
+
+                        audience,
+                        messageId
+
+                    ]
+                );
+
+
+            await logActivity(
+
+                "CONVERSION_MESSAGE_OFFICIEL",
+
+                `Message #${messageId} transformé en annonce officielle — audience : ${audience}`
+
+            );
+
+
+            return res.json({
+
+                success: true,
+
+                message:
+                    "Le message a été transformé en annonce officielle.",
+
+                data:
+                    result.rows[0]
+
+            });
+
+
+        } catch (err) {
+
+            console.error(
+                "POST /api/messages/:id/convert :",
+                err
+            );
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de convertir le message.",
+
+                error:
+                    err.message
+
+            });
+
+        }
+
+    }
+);
+
+
+/* ============================================================
+   24.8 — UTILISATEUR : RÉCUPÉRER SES MESSAGES
 ============================================================ */
 
 app.get(
@@ -3613,11 +4365,30 @@ app.get(
             }
 
 
-            const user =
-                await getUserById(userId);
+            /*
+             * On récupère uniquement les informations
+             * nécessaires pour déterminer l'audience.
+             */
+
+            const userResult =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        premium,
+                        is_premium,
+                        premium_until,
+                        blocked,
+                        is_blocked
+                    FROM users
+                    WHERE id = $1
+                    LIMIT 1
+                    `,
+                    [userId]
+                );
 
 
-            if (!user) {
+            if (!userResult.rows.length) {
 
                 return res.status(404).json({
 
@@ -3631,9 +4402,9 @@ app.get(
             }
 
 
-            /*
-             * Déterminer le type d'utilisateur.
-             */
+            const user =
+                userResult.rows[0];
+
 
             const premiumActive =
                 (
@@ -3641,9 +4412,12 @@ app.get(
                         user.premium ||
                         user.is_premium
                     )
+
                     &&
+
                     (
                         !user.premium_until ||
+
                         new Date(
                             user.premium_until
                         ) > new Date()
@@ -3658,16 +4432,11 @@ app.get(
 
 
             /*
-             * Récupérer :
+             * Requête optimisée :
              *
-             * 1. Les messages personnels
-             *    destinés à cet utilisateur
-             *
-             * 2. Les réponses envoyées
-             *    par cet utilisateur
-             *
-             * 3. Les messages officiels
-             *    correspondant à son audience
+             * - messages personnels
+             * - annonces officielles correspondant
+             *   à l'utilisateur
              */
 
             const result =
@@ -3675,6 +4444,7 @@ app.get(
                     `
                     SELECT
                         id,
+
                         sender_type,
                         sender_email,
 
@@ -3715,7 +4485,7 @@ app.get(
                     ORDER BY
                         created_at DESC
 
-                    LIMIT 500
+                    LIMIT 200
                     `,
                     [
                         userId,
@@ -3723,12 +4493,6 @@ app.get(
                     ]
                 );
 
-
-            /*
-             * IMPORTANT :
-             * On retourne directement "messages".
-             * Le frontend attend exactement ce format.
-             */
 
             return res.json({
 
@@ -3769,7 +4533,7 @@ app.get(
 
 
 /* ============================================================
-   24.7 — MARQUER MESSAGE COMME LU
+   24.9 — MARQUER MESSAGE COMME LU
 ============================================================ */
 
 app.patch(
@@ -3828,9 +4592,12 @@ app.patch(
                         user.premium ||
                         user.is_premium
                     )
+
                     &&
+
                     (
                         !user.premium_until ||
+
                         new Date(
                             user.premium_until
                         ) > new Date()
@@ -3850,6 +4617,7 @@ app.patch(
                     UPDATE messages
 
                     SET
+
                         status = 'read',
 
                         read_at =
@@ -3946,7 +4714,7 @@ app.patch(
 
 
 /* ============================================================
-   24.8 — COMPATIBILITÉ : MARQUER COMME LU
+   24.10 — COMPATIBILITÉ : MARQUER COMME LU
 ============================================================ */
 
 app.patch(
@@ -3979,6 +4747,7 @@ app.patch(
                     UPDATE messages
 
                     SET
+
                         status = 'read',
 
                         read_at =
@@ -4051,7 +4820,7 @@ app.patch(
 
 
 /* ============================================================
-   24.9 — UTILITAIRE : RÉPONDRE À UN MESSAGE
+   24.11 — UTILITAIRE : RÉPONDRE À UN MESSAGE
 ============================================================ */
 
 async function handleUserMessageReply(
@@ -4067,10 +4836,8 @@ async function handleUserMessageReply(
         userId =
             parseId(userId);
 
-
         messageId =
             parseId(messageId);
-
 
         content =
             String(
@@ -4181,9 +4948,7 @@ async function handleUserMessageReply(
             );
 
 
-        if (
-            !originalResult.rows.length
-        ) {
+        if (!originalResult.rows.length) {
 
             return res.status(404).json({
 
@@ -4200,11 +4965,6 @@ async function handleUserMessageReply(
         const original =
             originalResult.rows[0];
 
-
-        /*
-         * Impossible de répondre
-         * à une annonce officielle.
-         */
 
         if (
             original.type ===
@@ -4223,11 +4983,6 @@ async function handleUserMessageReply(
         }
 
 
-        /*
-         * Impossible de répondre
-         * à une autre réponse.
-         */
-
         if (
             original.type ===
             "user_reply"
@@ -4245,14 +5000,9 @@ async function handleUserMessageReply(
         }
 
 
-        /*
-         * Seuls les messages personnels
-         * envoyés par l'administration
-         * peuvent recevoir une réponse.
-         */
-
         if (
-            original.type !== "user"
+            original.type !==
+            "user"
         ) {
 
             return res.status(403).json({
@@ -4420,7 +5170,7 @@ async function handleUserMessageReply(
 
 
 /* ============================================================
-   24.10 — UTILISATEUR RÉPOND
+   24.12 — UTILISATEUR RÉPOND
 ============================================================ */
 
 app.post(
@@ -4428,11 +5178,15 @@ app.post(
     async function (req, res) {
 
         const userId =
-            parseId(req.params.id);
+            parseId(
+                req.params.id
+            );
 
 
         const messageId =
-            parseId(req.params.messageId);
+            parseId(
+                req.params.messageId
+            );
 
 
         const content =
@@ -4452,7 +5206,7 @@ app.post(
 
 
 /* ============================================================
-   24.11 — COMPATIBILITÉ ANCIENNE ROUTE RÉPONSE
+   24.13 — COMPATIBILITÉ ANCIENNE ROUTE RÉPONSE
 ============================================================ */
 
 app.post(
@@ -4488,7 +5242,7 @@ app.post(
 
 
 /* ============================================================
-   24.12 — ADMIN SUPPRIME UN MESSAGE
+   24.14 — ADMIN SUPPRIME UN MESSAGE
 ============================================================ */
 
 app.delete(
@@ -4523,6 +5277,7 @@ app.delete(
                         id,
                         subject,
                         recipient_user_id,
+                        recipient_email,
                         type
 
                     FROM messages
@@ -4535,9 +5290,7 @@ app.delete(
                 );
 
 
-            if (
-                !existing.rows.length
-            ) {
+            if (!existing.rows.length) {
 
                 return res.status(404).json({
 
@@ -4568,8 +5321,8 @@ app.delete(
 
                 "SUPPRESSION_MESSAGE",
 
-                `Message supprimé : ${
-                    message.subject
+                `Message #${id} supprimé : ${
+                    message.subject || ""
                 }`,
 
                 message.recipient_user_id ||
@@ -4586,7 +5339,7 @@ app.delete(
                     "Message supprimé avec succès",
 
                 data: {
-                    id: id
+                    id
                 }
 
             });
