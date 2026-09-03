@@ -2901,189 +2901,253 @@ app.get(
 ============================================================ */
 
 
-
 /* ============================================================
    24.1 UTILITAIRE UTILISATEUR
 ============================================================ */
 
 async function getUserById(userId) {
 
-    const id = parseId(userId);
+    const id =
+        parseId(userId);
+
 
     if (!id) {
+
         return null;
+
     }
 
-    const result = await pool.query(
-        `
-        SELECT
-            id,
-            nom,
-            email,
-            telephone,
-            domaine,
-            photo,
-            premium,
-            is_premium,
-            premium_until,
-            blocked,
-            is_blocked
-        FROM users
-        WHERE id = $1
-        LIMIT 1
-        `,
-        [id]
-    );
+
+    const result =
+        await pool.query(
+
+            `
+            SELECT
+                id,
+                nom,
+                email,
+                telephone,
+                domaine,
+                photo,
+                premium,
+                is_premium,
+                premium_until,
+                blocked,
+                is_blocked
+
+            FROM users
+
+            WHERE id=$1
+
+            LIMIT 1
+            `,
+
+            [id]
+
+        );
+
 
     return result.rows[0] || null;
+
 }
 
 
 /* ============================================================
-   24.2 MESSAGES POUR L'ADMIN
+   24.2 LISTE DES MESSAGES POUR ADMIN
 ============================================================ */
 
 app.get(
+
     "/api/messages",
+
     adminAuth,
+
     async function(req, res) {
 
         try {
 
-            const result = await pool.query(
-                `
-                SELECT
+            const result =
+                await pool.query(
 
-                    m.*,
+                    `
+                    SELECT
 
-                    u.nom
-                        AS user_nom_db,
+                        m.*,
 
-                    u.email
-                        AS user_email_db,
+                        u.nom
+                            AS user_nom_db,
 
-                    u.telephone
-                        AS user_telephone_db,
+                        u.email
+                            AS user_email_db,
 
-                    u.premium
-                        AS user_premium_db,
+                        u.telephone
+                            AS user_telephone_db,
 
-                    u.is_premium
-                        AS user_is_premium_db
+                        u.premium
+                            AS user_premium_db,
 
-                FROM messages m
+                        u.is_premium
+                            AS user_is_premium_db
 
-                LEFT JOIN users u
-                    ON u.id = m.recipient_user_id
+                    FROM messages m
 
-                ORDER BY
-                    m.created_at DESC
+                    LEFT JOIN users u
+                        ON u.id =
+                           m.recipient_user_id
 
-                LIMIT 1000
-                `
-            );
+                    ORDER BY
+                        m.created_at DESC
+
+                    LIMIT 1000
+                    `
+
+                );
+
 
             return success(
+
                 res,
+
                 result.rows,
+
                 "Messages chargés"
+
             );
 
         } catch (err) {
 
             return error(
+
                 res,
+
                 "Impossible de charger les messages.",
+
                 500,
+
                 err.message
+
             );
+
         }
+
     }
+
 );
 
 
 /* ============================================================
-   24.3 RÉCUPÉRER UN MESSAGE — ADMIN
+   24.3 RÉCUPÉRER UN MESSAGE
 ============================================================ */
 
 app.get(
+
     "/api/messages/:id",
+
     adminAuth,
+
     async function(req, res) {
 
         try {
 
-            const id = parseId(
-                req.params.id
-            );
+            const id =
+                parseId(
+                    req.params.id
+                );
+
 
             if (!id) {
 
                 return error(
+
                     res,
+
                     "Identifiant du message invalide.",
+
                     400
+
                 );
+
             }
 
-            const result = await pool.query(
-                `
-                SELECT
 
-                    m.*,
+            const result =
+                await pool.query(
 
-                    u.nom
-                        AS user_nom_db,
+                    `
+                    SELECT
 
-                    u.email
-                        AS user_email_db,
+                        m.*,
 
-                    u.telephone
-                        AS user_telephone_db,
+                        u.nom
+                            AS user_nom_db,
 
-                    u.premium
-                        AS user_premium_db,
+                        u.email
+                            AS user_email_db,
 
-                    u.is_premium
-                        AS user_is_premium_db
+                        u.telephone
+                            AS user_telephone_db
 
-                FROM messages m
+                    FROM messages m
 
-                LEFT JOIN users u
-                    ON u.id = m.recipient_user_id
+                    LEFT JOIN users u
+                        ON u.id =
+                           m.recipient_user_id
 
-                WHERE m.id = $1
+                    WHERE m.id=$1
 
-                LIMIT 1
-                `,
-                [id]
-            );
+                    LIMIT 1
+                    `,
 
-            if (!result.rows.length) {
+                    [id]
+
+                );
+
+
+            if (
+                !result.rows.length
+            ) {
 
                 return error(
+
                     res,
+
                     "Message introuvable.",
+
                     404
+
                 );
+
             }
 
+
             return success(
+
                 res,
+
                 result.rows[0],
+
                 "Message récupéré"
+
             );
 
         } catch (err) {
 
             return error(
+
                 res,
+
                 "Impossible de récupérer le message.",
+
                 500,
+
                 err.message
+
             );
+
         }
+
     }
+
 );
 
 
@@ -3092,492 +3156,717 @@ app.get(
 ============================================================ */
 
 app.post(
+
     "/api/messages/user",
+
     adminAuth,
+
     async function(req, res) {
 
         try {
 
-            const body = req.body || {};
-
-            const userId = parseId(
-                body.user_id ||
-                body.recipient_id
-            );
-
-            const subject = String(
-                body.subject || ""
-            ).trim();
-
-            const content = String(
-                body.content ||
-                body.message ||
-                ""
-            ).trim();
-
-            const priorityRaw = String(
-                body.priority ||
-                "normal"
-            )
-                .trim()
-                .toLowerCase();
-
-            const priority = [
-                "normal",
-                "important",
-                "urgent"
-            ].includes(priorityRaw)
-                ? priorityRaw
-                : "normal";
+            const body =
+                req.body || {};
 
 
-            /* ------------------------------------------------
-               VALIDATIONS
-            ------------------------------------------------ */
+            const userId =
+                parseId(
+
+                    body.user_id ||
+                    body.recipient_id
+
+                );
+
+
+            const subject =
+                String(
+
+                    body.subject ||
+                    ""
+
+                ).trim();
+
+
+            const content =
+                String(
+
+                    body.content ||
+                    body.message ||
+                    ""
+
+                ).trim();
+
+
+            const priorityRaw =
+                String(
+
+                    body.priority ||
+                    "normal"
+
+                )
+
+                    .trim()
+                    .toLowerCase();
+
+
+            const priority =
+                [
+
+                    "normal",
+                    "important",
+                    "urgent"
+
+                ].includes(priorityRaw)
+
+                    ? priorityRaw
+
+                    : "normal";
+
 
             if (!userId) {
 
                 return error(
+
                     res,
+
                     "Utilisateur invalide.",
+
                     400
+
                 );
+
             }
+
 
             if (!subject) {
 
                 return error(
+
                     res,
+
                     "Le sujet du message est obligatoire.",
+
                     400
+
                 );
+
             }
+
 
             if (!content) {
 
                 return error(
+
                     res,
+
                     "Le contenu du message est obligatoire.",
+
                     400
+
                 );
+
             }
+
 
             if (subject.length > 500) {
 
                 return error(
+
                     res,
+
                     "Le sujet est trop long.",
+
                     400
+
                 );
+
             }
+
 
             if (content.length > 5000) {
 
                 return error(
+
                     res,
+
                     "Le message est trop long.",
+
                     400
+
                 );
+
             }
 
 
-            /* ------------------------------------------------
-               RÉCUPÉRER L'UTILISATEUR
-            ------------------------------------------------ */
+            const user =
+                await getUserById(
+                    userId
+                );
 
-            const user = await getUserById(
-                userId
-            );
 
             if (!user) {
 
                 return error(
+
                     res,
+
                     "Utilisateur introuvable.",
+
                     404
+
                 );
+
             }
 
 
-            /* ------------------------------------------------
-               COMPTE BLOQUÉ
-            ------------------------------------------------ */
+            const result =
+                await pool.query(
 
-            if (
-                user.blocked === true ||
-                user.is_blocked === true
-            ) {
+                    `
+                    INSERT INTO messages
+                    (
+                        sender_type,
+                        sender_email,
+                        recipient_user_id,
+                        recipient_name,
+                        recipient_email,
+                        type,
+                        subject,
+                        content,
+                        priority,
+                        status,
+                        audience
+                    )
 
-                return error(
-                    res,
-                    "Impossible d'envoyer un message à un compte bloqué.",
-                    403
+                    VALUES
+                    (
+                        'admin',
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        'user',
+                        $5,
+                        $6,
+                        $7,
+                        'sent',
+                        'individual'
+                    )
+
+                    RETURNING *
+                    `,
+
+                    [
+
+                        ADMIN_EMAIL,
+
+                        user.id,
+
+                        user.nom,
+
+                        user.email,
+
+                        subject,
+
+                        content,
+
+                        priority
+
+                    ]
+
                 );
-            }
 
-
-            /* ------------------------------------------------
-               CRÉATION DU MESSAGE
-            ------------------------------------------------ */
-
-            const result = await pool.query(
-                `
-                INSERT INTO messages
-                (
-                    sender_type,
-                    sender_email,
-
-                    recipient_user_id,
-                    recipient_name,
-                    recipient_email,
-
-                    type,
-                    subject,
-                    content,
-
-                    priority,
-                    status,
-                    audience,
-
-                    read_at,
-                    created_at,
-                    updated_at
-                )
-
-                VALUES
-                (
-                    'admin',
-                    $1,
-
-                    $2,
-                    $3,
-                    $4,
-
-                    'user',
-                    $5,
-                    $6,
-
-                    $7,
-                    'sent',
-                    'individual',
-
-                    NULL,
-                    CURRENT_TIMESTAMP,
-                    CURRENT_TIMESTAMP
-                )
-
-                RETURNING *
-                `,
-                [
-                    ADMIN_EMAIL,
-
-                    user.id,
-                    user.nom,
-                    user.email,
-
-                    subject,
-                    content,
-
-                    priority
-                ]
-            );
 
             const message =
                 result.rows[0];
 
 
-            /* ------------------------------------------------
-               JOURNAL ADMIN
-            ------------------------------------------------ */
-
             await logActivity(
+
                 "MESSAGE_UTILISATEUR",
+
                 `Message envoyé à ${user.email} : ${subject}`,
+
                 user.id
+
             );
 
 
             return success(
+
                 res,
+
                 message,
+
                 "Message envoyé avec succès"
+
             );
 
         } catch (err) {
 
             return error(
+
                 res,
+
                 "Impossible d'envoyer le message.",
+
                 500,
+
                 err.message
+
             );
+
         }
+
     }
+
 );
 
 
 /* ============================================================
-   24.5 MESSAGE OFFICIEL
+   24.5 ENVOYER UN MESSAGE OFFICIEL
 ============================================================ */
 
 app.post(
+
     "/api/messages/official",
+
     adminAuth,
+
     async function(req, res) {
 
         try {
 
-            const body = req.body || {};
-
-            const subject = String(
-                body.subject || ""
-            ).trim();
-
-            const content = String(
-                body.content ||
-                body.message ||
-                ""
-            ).trim();
+            const body =
+                req.body || {};
 
 
-            const priorityRaw = String(
-                body.priority ||
-                "normal"
-            )
-                .trim()
-                .toLowerCase();
+            const subject =
+                String(
 
-            const priority = [
-                "normal",
-                "important",
-                "urgent"
-            ].includes(priorityRaw)
-                ? priorityRaw
-                : "normal";
+                    body.subject ||
+                    ""
+
+                ).trim();
 
 
-            const audienceRaw = String(
-                body.audience ||
-                "all"
-            )
-                .trim()
-                .toLowerCase();
+            const content =
+                String(
 
-            const audience = [
-                "all",
-                "premium",
-                "standard"
-            ].includes(audienceRaw)
-                ? audienceRaw
-                : "all";
+                    body.content ||
+                    body.message ||
+                    ""
+
+                ).trim();
 
 
-            /* ------------------------------------------------
-               VALIDATIONS
-            ------------------------------------------------ */
+            const priorityRaw =
+                String(
+
+                    body.priority ||
+                    "normal"
+
+                )
+
+                    .trim()
+                    .toLowerCase();
+
+
+            const priority =
+                [
+
+                    "normal",
+                    "important",
+                    "urgent"
+
+                ].includes(priorityRaw)
+
+                    ? priorityRaw
+
+                    : "normal";
+
+
+            const audienceRaw =
+                String(
+
+                    body.audience ||
+                    "all"
+
+                )
+
+                    .trim()
+                    .toLowerCase();
+
+
+            const audience =
+                [
+
+                    "all",
+                    "premium",
+                    "standard"
+
+                ].includes(audienceRaw)
+
+                    ? audienceRaw
+
+                    : "all";
+
 
             if (!subject) {
 
                 return error(
+
                     res,
+
                     "Le sujet du message officiel est obligatoire.",
+
                     400
+
                 );
+
             }
+
 
             if (!content) {
 
                 return error(
+
                     res,
+
                     "Le contenu du message officiel est obligatoire.",
+
                     400
+
                 );
+
             }
+
 
             if (subject.length > 500) {
 
                 return error(
+
                     res,
+
                     "Le sujet est trop long.",
+
                     400
+
                 );
+
             }
+
 
             if (content.length > 5000) {
 
                 return error(
+
                     res,
+
                     "Le message est trop long.",
+
                     400
+
                 );
+
             }
 
 
-            /* ------------------------------------------------
-               CRÉATION DU MESSAGE OFFICIEL
-            ------------------------------------------------ */
+            const result =
+                await pool.query(
 
-            const result = await pool.query(
-                `
-                INSERT INTO messages
-                (
-                    sender_type,
-                    sender_email,
+                    `
+                    INSERT INTO messages
+                    (
+                        sender_type,
+                        sender_email,
+                        recipient_user_id,
+                        recipient_name,
+                        recipient_email,
+                        type,
+                        subject,
+                        content,
+                        priority,
+                        status,
+                        audience
+                    )
 
-                    recipient_user_id,
-                    recipient_name,
-                    recipient_email,
+                    VALUES
+                    (
+                        'admin',
+                        $1,
+                        NULL,
+                        NULL,
+                        NULL,
+                        'official',
+                        $2,
+                        $3,
+                        $4,
+                        'sent',
+                        $5
+                    )
 
-                    type,
-                    subject,
-                    content,
+                    RETURNING *
+                    `,
 
-                    priority,
-                    status,
-                    audience,
+                    [
 
-                    read_at,
-                    created_at,
-                    updated_at
-                )
+                        ADMIN_EMAIL,
 
-                VALUES
-                (
-                    'admin',
-                    $1,
+                        subject,
 
-                    NULL,
-                    NULL,
-                    NULL,
+                        content,
 
-                    'official',
-                    $2,
-                    $3,
+                        priority,
 
-                    $4,
-                    'sent',
-                    $5,
+                        audience
 
-                    NULL,
-                    CURRENT_TIMESTAMP,
-                    CURRENT_TIMESTAMP
-                )
+                    ]
 
-                RETURNING *
-                `,
-                [
-                    ADMIN_EMAIL,
+                );
 
-                    subject,
-                    content,
-
-                    priority,
-                    audience
-                ]
-            );
 
             const message =
                 result.rows[0];
 
 
             await logActivity(
+
                 "MESSAGE_OFFICIEL",
+
                 `Message officiel envoyé — audience : ${audience} — ${subject}`
+
             );
 
 
             return success(
+
                 res,
+
                 message,
+
                 "Message officiel envoyé avec succès"
+
             );
 
         } catch (err) {
 
             return error(
+
                 res,
+
                 "Impossible d'envoyer le message officiel.",
+
                 500,
+
                 err.message
+
             );
+
         }
+
     }
+
 );
 
 
 /* ============================================================
-   24.6 MESSAGES DESTINÉS À UN UTILISATEUR
+   24.6 SUPPRIMER UN MESSAGE
 ============================================================ */
 
-app.get(
-    "/api/utilisateurs/:id/messages",
+app.delete(
+
+    "/api/messages/:id",
+
+    adminAuth,
+
     async function(req, res) {
 
         try {
 
-            const userId = parseId(
-                req.params.id
+            const id =
+                parseId(
+                    req.params.id
+                );
+
+
+            if (!id) {
+
+                return error(
+
+                    res,
+
+                    "Identifiant du message invalide.",
+
+                    400
+
+                );
+
+            }
+
+
+            const existing =
+                await pool.query(
+
+                    `
+                    SELECT
+                        id,
+                        subject,
+                        recipient_user_id,
+                        type
+
+                    FROM messages
+
+                    WHERE id=$1
+
+                    LIMIT 1
+                    `,
+
+                    [id]
+
+                );
+
+
+            if (
+                !existing.rows.length
+            ) {
+
+                return error(
+
+                    res,
+
+                    "Message introuvable.",
+
+                    404
+
+                );
+
+            }
+
+
+            const message =
+                existing.rows[0];
+
+
+            await pool.query(
+
+                `
+                DELETE FROM messages
+                WHERE id=$1
+                `,
+
+                [id]
+
             );
+
+
+            await logActivity(
+
+                "SUPPRESSION_MESSAGE",
+
+                `Message supprimé : ${message.subject}`,
+
+                message.recipient_user_id || null
+
+            );
+
+
+            return success(
+
+                res,
+
+                {
+
+                    id
+
+                },
+
+                "Message supprimé avec succès"
+
+            );
+
+        } catch (err) {
+
+            return error(
+
+                res,
+
+                "Impossible de supprimer le message.",
+
+                500,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
+/* ============================================================
+   24.7 MESSAGES D'UN UTILISATEUR
+============================================================ */
+
+app.get(
+
+    "/api/utilisateurs/:id/messages",
+
+    async function(req, res) {
+
+        try {
+
+            const userId =
+                parseId(
+                    req.params.id
+                );
+
 
             if (!userId) {
 
                 return error(
+
                     res,
+
                     "Identifiant utilisateur invalide.",
+
                     400
+
                 );
+
             }
 
 
-            /* ------------------------------------------------
-               UTILISATEUR
-            ------------------------------------------------ */
+            const user =
+                await getUserById(
+                    userId
+                );
 
-            const user = await getUserById(
-                userId
-            );
 
             if (!user) {
 
                 return error(
+
                     res,
+
                     "Utilisateur introuvable.",
+
                     404
+
                 );
+
             }
 
 
-            /* ------------------------------------------------
-               DÉTERMINER LE STATUT PREMIUM
-            ------------------------------------------------ */
+            const isPremium =
+                Boolean(
 
-            let isPremium = Boolean(
-                user.premium ||
-                user.is_premium
-            );
+                    user.premium ||
+                    user.is_premium
 
-
-            /* ------------------------------------------------
-               VÉRIFIER L'EXPIRATION PREMIUM
-            ------------------------------------------------ */
-
-            if (
-                isPremium &&
-                user.premium_until
-            ) {
-
-                const premiumUntil =
-                    new Date(
-                        user.premium_until
-                    );
-
-                if (
-                    premiumUntil < new Date()
-                ) {
-
-                    isPremium = false;
-                }
-            }
+                );
 
 
             const audience =
@@ -3586,831 +3875,226 @@ app.get(
                     : "standard";
 
 
-            /* ------------------------------------------------
-               RÉCUPÉRER LES MESSAGES
-               
-               1. Messages individuels
-               2. Réponses utilisateur
-               3. Messages officiels
-            ------------------------------------------------ */
-
-            const result = await pool.query(
-                `
-                SELECT
-
-                    id,
-
-                    sender_type,
-                    sender_email,
-
-                    recipient_user_id,
-                    recipient_name,
-                    recipient_email,
-
-                    type,
-
-                    subject,
-                    content,
-
-                    priority,
-                    status,
-                    audience,
-
-                    read_at,
-
-                    created_at,
-                    updated_at
-
-                FROM messages
-
-                WHERE
-
-                    (
-                        type IN (
-                            'user',
-                            'user_reply'
-                        )
-                        AND
-                        recipient_user_id = $1
-                    )
-
-                    OR
-
-                    (
-                        type = 'official'
-                        AND
-                        (
-                            audience = 'all'
-                            OR
-                            audience = $2
-                        )
-                    )
-
-                ORDER BY
-                    created_at DESC
-
-                LIMIT 500
-                `,
-                [
-                    userId,
-                    audience
-                ]
-            );
-
-
-            return success(
-                res,
-                result.rows,
-                "Messages utilisateur chargés"
-            );
-
-        } catch (err) {
-
-            return error(
-                res,
-                "Impossible de charger les messages de l'utilisateur.",
-                500,
-                err.message
-            );
-        }
-    }
-);
-
-
-/* ============================================================
-   24.7 MARQUER UN MESSAGE COMME LU — UTILISATEUR
-============================================================ */
-
-app.patch(
-    "/api/utilisateurs/:userId/messages/:messageId/read",
-    async function(req, res) {
-
-        try {
-
-            const userId = parseId(
-                req.params.userId
-            );
-
-            const messageId = parseId(
-                req.params.messageId
-            );
-
-
-            if (!userId) {
-
-                return error(
-                    res,
-                    "Identifiant utilisateur invalide.",
-                    400
-                );
-            }
-
-            if (!messageId) {
-
-                return error(
-                    res,
-                    "Identifiant du message invalide.",
-                    400
-                );
-            }
-
-
-            /* ------------------------------------------------
-               VÉRIFIER QUE LE MESSAGE APPARTIENT À L'UTILISATEUR
-            ------------------------------------------------ */
-
-            const result = await pool.query(
-                `
-                UPDATE messages
-
-                SET
-
-                    status = 'read',
-
-                    read_at = COALESCE(
-                        read_at,
-                        CURRENT_TIMESTAMP
-                    ),
-
-                    updated_at =
-                        CURRENT_TIMESTAMP
-
-                WHERE
-
-                    id = $1
-
-                    AND
-
-                    (
-                        recipient_user_id = $2
-
-                        OR
-
-                        (
-                            type = 'official'
-                            AND
-                            id = $1
-                        )
-                    )
-
-                RETURNING *
-                `,
-                [
-                    messageId,
-                    userId
-                ]
-            );
-
-
-            if (!result.rows.length) {
-
-                return error(
-                    res,
-                    "Message introuvable ou non autorisé.",
-                    404
-                );
-            }
-
-
-            return success(
-                res,
-                result.rows[0],
-                "Message marqué comme lu"
-            );
-
-        } catch (err) {
-
-            return error(
-                res,
-                "Impossible de marquer le message comme lu.",
-                500,
-                err.message
-            );
-        }
-    }
-);
-
-
-/* ============================================================
-   24.8 COMPATIBILITÉ — MARQUER UN MESSAGE COMME LU
-============================================================ */
-
-app.patch(
-    "/api/messages/:id/read",
-    async function(req, res) {
-
-        try {
-
-            const id = parseId(
-                req.params.id
-            );
-
-            if (!id) {
-
-                return error(
-                    res,
-                    "Identifiant du message invalide.",
-                    400
-                );
-            }
-
-
-            const result = await pool.query(
-                `
-                UPDATE messages
-
-                SET
-
-                    status = 'read',
-
-                    read_at = COALESCE(
-                        read_at,
-                        CURRENT_TIMESTAMP
-                    ),
-
-                    updated_at =
-                        CURRENT_TIMESTAMP
-
-                WHERE id = $1
-
-                RETURNING *
-                `,
-                [id]
-            );
-
-
-            if (!result.rows.length) {
-
-                return error(
-                    res,
-                    "Message introuvable.",
-                    404
-                );
-            }
-
-
-            return success(
-                res,
-                result.rows[0],
-                "Message marqué comme lu"
-            );
-
-        } catch (err) {
-
-            return error(
-                res,
-                "Impossible de marquer le message comme lu.",
-                500,
-                err.message
-            );
-        }
-    }
-);
-
-
-/* ============================================================
-   24.9 RÉPONDRE À UN MESSAGE INDIVIDUEL
-============================================================ */
-
-async function handleUserMessageReply(
-    req,
-    res,
-    userId,
-    messageId,
-    content
-) {
-
-    try {
-
-        /* ----------------------------------------------------
-           VALIDATION DES IDENTIFIANTS
-        ---------------------------------------------------- */
-
-        if (!userId) {
-
-            return error(
-                res,
-                "Utilisateur non identifié.",
-                400
-            );
-        }
-
-        if (!messageId) {
-
-            return error(
-                res,
-                "Identifiant du message invalide.",
-                400
-            );
-        }
-
-
-        /* ----------------------------------------------------
-           VALIDATION DU CONTENU
-        ---------------------------------------------------- */
-
-        if (!content) {
-
-            return error(
-                res,
-                "Votre réponse ne peut pas être vide.",
-                400
-            );
-        }
-
-        if (content.length > 5000) {
-
-            return error(
-                res,
-                "Votre réponse est trop longue.",
-                400
-            );
-        }
-
-
-        /* ----------------------------------------------------
-           RÉCUPÉRER L'UTILISATEUR
-        ---------------------------------------------------- */
-
-        const user = await getUserById(
-            userId
-        );
-
-        if (!user) {
-
-            return error(
-                res,
-                "Utilisateur introuvable.",
-                404
-            );
-        }
-
-
-        /* ----------------------------------------------------
-           COMPTE BLOQUÉ
-        ---------------------------------------------------- */
-
-        if (
-            user.blocked === true ||
-            user.is_blocked === true
-        ) {
-
-            return error(
-                res,
-                "Votre compte est bloqué.",
-                403
-            );
-        }
-
-
-        /* ----------------------------------------------------
-           RÉCUPÉRER LE MESSAGE ORIGINAL
-        ---------------------------------------------------- */
-
-        const originalResult =
-            await pool.query(
-                `
-                SELECT
-
-                    id,
-
-                    sender_type,
-                    sender_email,
-
-                    recipient_user_id,
-
-                    type,
-                    subject,
-                    content,
-
-                    priority,
-                    status
-
-                FROM messages
-
-                WHERE id = $1
-
-                LIMIT 1
-                `,
-                [messageId]
-            );
-
-
-        if (!originalResult.rows.length) {
-
-            return error(
-                res,
-                "Message introuvable.",
-                404
-            );
-        }
-
-
-        const original =
-            originalResult.rows[0];
-
-
-        /* ----------------------------------------------------
-           INTERDIRE LES RÉPONSES AUX OFFICIELS
-        ---------------------------------------------------- */
-
-        if (
-            original.type === "official"
-        ) {
-
-            return error(
-                res,
-                "Vous ne pouvez pas répondre à une communication officielle.",
-                403
-            );
-        }
-
-
-        /* ----------------------------------------------------
-           INTERDIRE LES RÉPONSES À UNE RÉPONSE
-        ---------------------------------------------------- */
-
-        if (
-            original.type === "user_reply"
-        ) {
-
-            return error(
-                res,
-                "Vous ne pouvez pas répondre à votre propre réponse.",
-                403
-            );
-        }
-
-
-        /* ----------------------------------------------------
-           LE MESSAGE DOIT ÊTRE UN MESSAGE ADMIN
-        ---------------------------------------------------- */
-
-        if (
-            original.type !== "user" ||
-            original.sender_type !== "admin"
-        ) {
-
-            return error(
-                res,
-                "Ce message ne peut pas recevoir de réponse.",
-                403
-            );
-        }
-
-
-        /* ----------------------------------------------------
-           VÉRIFIER QUE LE MESSAGE APPARTIENT À L'UTILISATEUR
-        ---------------------------------------------------- */
-
-        if (
-            Number(
-                original.recipient_user_id
-            ) !== Number(userId)
-        ) {
-
-            return error(
-                res,
-                "Ce message ne vous est pas destiné.",
-                403
-            );
-        }
-
-
-        /* ----------------------------------------------------
-           SUJET DE LA RÉPONSE
-        ---------------------------------------------------- */
-
-        let replySubject =
-            original.subject
-                ? `Réponse : ${original.subject}`
-                : "Réponse utilisateur";
-
-
-        if (replySubject.length > 500) {
-
-            replySubject =
-                replySubject.substring(
-                    0,
-                    500
-                );
-        }
-
-
-        /* ----------------------------------------------------
-           CRÉER LA RÉPONSE
-           
-           recipient_user_id = user.id
-           
-           Cela permet :
-           - à l'admin de retrouver la conversation ;
-           - à l'utilisateur de voir sa réponse ;
-           - de conserver le lien avec son compte.
-        ---------------------------------------------------- */
-
-        const result = await pool.query(
-            `
-            INSERT INTO messages
-            (
-                sender_type,
-                sender_email,
-
-                recipient_user_id,
-                recipient_name,
-                recipient_email,
-
-                type,
-                subject,
-                content,
-
-                priority,
-                status,
-                audience,
-
-                read_at,
-                created_at,
-                updated_at
-            )
-
-            VALUES
-            (
-                'user',
-                $1,
-
-                $2,
-                $3,
-                $4,
-
-                'user_reply',
-                $5,
-                $6,
-
-                $7,
-                'sent',
-                'admin',
-
-                NULL,
-                CURRENT_TIMESTAMP,
-                CURRENT_TIMESTAMP
-            )
-
-            RETURNING *
-            `,
-            [
-
-                user.email || null,
-
-                user.id,
-                user.nom || null,
-                user.email || null,
-
-                replySubject,
-                content,
-
-                original.priority || "normal"
-            ]
-        );
-
-
-        const reply =
-            result.rows[0];
-
-
-        /* ----------------------------------------------------
-           JOURNAL ADMIN
-        ---------------------------------------------------- */
-
-        await logActivity(
-            "REPONSE_UTILISATEUR",
-            `Réponse de ${user.email} : ${replySubject}`,
-            user.id
-        );
-
-
-        return success(
-            res,
-            reply,
-            "Votre réponse a été envoyée avec succès."
-        );
-
-    } catch (err) {
-
-        return error(
-            res,
-            "Impossible d'envoyer votre réponse.",
-            500,
-            err.message
-        );
-    }
-}
-
-
-/* ============================================================
-   24.10 RÉPONSE UTILISATEUR — ROUTE PRINCIPALE
-============================================================ */
-
-app.post(
-    "/api/utilisateurs/:id/messages/:messageId/repondre",
-    async function(req, res) {
-
-        try {
-
-            const userId = parseId(
-                req.params.id
-            );
-
-            const messageId = parseId(
-                req.params.messageId
-            );
-
-            const body =
-                req.body || {};
-
-            const content = String(
-                body.content ||
-                body.message ||
-                ""
-            ).trim();
-
-
-            return await handleUserMessageReply(
-                req,
-                res,
-                userId,
-                messageId,
-                content
-            );
-
-        } catch (err) {
-
-            return error(
-                res,
-                "Impossible d'envoyer votre réponse.",
-                500,
-                err.message
-            );
-        }
-    }
-);
-
-
-/* ============================================================
-   24.11 RÉPONSE UTILISATEUR — COMPATIBILITÉ
-============================================================ */
-
-app.post(
-    "/api/messages/reply",
-    async function(req, res) {
-
-        try {
-
-            const body =
-                req.body || {};
-
-
-            const userId = parseId(
-                body.user_id
-            );
-
-            const messageId = parseId(
-                body.message_id
-            );
-
-            const content = String(
-                body.content ||
-                body.message ||
-                ""
-            ).trim();
-
-
-            return await handleUserMessageReply(
-                req,
-                res,
-                userId,
-                messageId,
-                content
-            );
-
-        } catch (err) {
-
-            return error(
-                res,
-                "Impossible d'envoyer votre réponse.",
-                500,
-                err.message
-            );
-        }
-    }
-);
-
-
-/* ============================================================
-   24.12 SUPPRIMER UN MESSAGE — ADMIN
-============================================================ */
-
-app.delete(
-    "/api/messages/:id",
-    adminAuth,
-    async function(req, res) {
-
-        try {
-
-            const id = parseId(
-                req.params.id
-            );
-
-
-            if (!id) {
-
-                return error(
-                    res,
-                    "Identifiant du message invalide.",
-                    400
-                );
-            }
-
-
-            /* ------------------------------------------------
-               VÉRIFIER L'EXISTENCE
-            ------------------------------------------------ */
-
-            const existing =
+            const result =
                 await pool.query(
+
                     `
                     SELECT
 
                         id,
-                        subject,
+
+                        sender_type,
+
+                        sender_email,
+
                         recipient_user_id,
-                        type
+
+                        recipient_name,
+
+                        recipient_email,
+
+                        type,
+
+                        subject,
+
+                        content,
+
+                        priority,
+
+                        status,
+
+                        audience,
+
+                        read_at,
+
+                        created_at,
+
+                        updated_at
 
                     FROM messages
 
-                    WHERE id = $1
+                    WHERE
 
-                    LIMIT 1
+                        recipient_user_id=$1
+
+                        OR
+
+                        (
+
+                            type='official'
+
+                            AND
+
+                            (
+
+                                audience='all'
+
+                                OR
+
+                                audience=$2
+
+                            )
+
+                        )
+
+                    ORDER BY
+                        created_at DESC
+
+                    LIMIT 500
                     `,
-                    [id]
+
+                    [
+
+                        userId,
+
+                        audience
+
+                    ]
+
                 );
-
-
-            if (!existing.rows.length) {
-
-                return error(
-                    res,
-                    "Message introuvable.",
-                    404
-                );
-            }
-
-
-            const message =
-                existing.rows[0];
-
-
-            /* ------------------------------------------------
-               SUPPRESSION
-            ------------------------------------------------ */
-
-            await pool.query(
-                `
-                DELETE FROM messages
-                WHERE id = $1
-                `,
-                [id]
-            );
-
-
-            /* ------------------------------------------------
-               JOURNAL ADMIN
-            ------------------------------------------------ */
-
-            await logActivity(
-                "SUPPRESSION_MESSAGE",
-                `Message supprimé : ${message.subject || "Sans sujet"}`,
-                message.recipient_user_id || null
-            );
 
 
             return success(
+
                 res,
-                {
-                    id
-                },
-                "Message supprimé avec succès"
+
+                result.rows,
+
+                "Messages utilisateur chargés"
+
             );
 
         } catch (err) {
 
             return error(
+
                 res,
-                "Impossible de supprimer le message.",
+
+                "Impossible de charger les messages de l'utilisateur.",
+
                 500,
+
                 err.message
+
             );
+
         }
+
     }
+
 );
+
+
+/* ============================================================
+   24.8 MARQUER UN MESSAGE COMME LU
+============================================================ */
+
+app.patch(
+
+    "/api/messages/:id/read",
+
+    async function(req, res) {
+
+        try {
+
+            const id =
+                parseId(
+                    req.params.id
+                );
+
+
+            if (!id) {
+
+                return error(
+
+                    res,
+
+                    "Identifiant du message invalide.",
+
+                    400
+
+                );
+
+            }
+
+
+            const result =
+                await pool.query(
+
+                    `
+                    UPDATE messages
+
+                    SET
+
+                        status='read',
+
+                        read_at=
+                            COALESCE(
+                                read_at,
+                                CURRENT_TIMESTAMP
+                            ),
+
+                        updated_at=
+                            CURRENT_TIMESTAMP
+
+                    WHERE id=$1
+
+                    RETURNING *
+                    `,
+
+                    [id]
+
+                );
+
+
+            if (
+                !result.rows.length
+            ) {
+
+                return error(
+
+                    res,
+
+                    "Message introuvable.",
+
+                    404
+
+                );
+
+            }
+
+
+            return success(
+
+                res,
+
+                result.rows[0],
+
+                "Message marqué comme lu"
+
+            );
+
+        } catch (err) {
+
+            return error(
+
+                res,
+
+                "Impossible de marquer le message comme lu.",
+
+                500,
+
+                err.message
+
+            );
+
+        }
+
+    }
+
+);
+
+
 /* ============================================================
    25. DASHBOARD ADMIN
 ============================================================ */
