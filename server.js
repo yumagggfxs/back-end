@@ -31,7 +31,7 @@ const ADMIN_EMAIL =
     process.env.ADMIN_EMAIL || "admin@bmjservice.com";
 
 const ADMIN_PASSWORD =
-    process.env.ADMIN_PASSWORD || "BMJ_Admin_2026!";
+    process.env.ADMIN_PASSWORD || "BMJAdmin@2026";
 
 const ADMIN_SECRET =
     process.env.ADMIN_SECRET ||
@@ -47,7 +47,343 @@ const JUSTIN_EMAIL = "mussiwajustin@gmail.com";
 const JUSTIN_PASSWORD =
     process.env.JUSTIN_ADMIN_PASSWORD ||
     "Justin_BMJ_2026!";
+// ============================================================
+// UTILISATEURS DE DEMONSTRATION BMJ SERVICE
+// ============================================================
 
+const DEMO_USERS = [
+
+    {
+        nom: "Jean Patrick Kabeya",
+        email: "jean.kabeya@gmail.com",
+        telephone: "+243 811 234 501",
+        pays: "République Démocratique du Congo",
+        ville: "Lubumbashi",
+        domaine: "Marketing Digital",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=11"
+    },
+
+    {
+        nom: "Sarah Ilunga",
+        email: "sarah.ilunga@gmail.com",
+        telephone: "+243 812 345 502",
+        pays: "République Démocratique du Congo",
+        ville: "Kinshasa",
+        domaine: "Leadership",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=12"
+    },
+
+    {
+        nom: "David Mbuyi",
+        email: "david.mbuyi@gmail.com",
+        telephone: "+243 813 456 503",
+        pays: "République Démocratique du Congo",
+        ville: "Kolwezi",
+        domaine: "Technologie et Industrialisation",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=13"
+    },
+
+    {
+        nom: "Esther Mukendi",
+        email: "esther.mukendi@gmail.com",
+        telephone: "+243 814 567 504",
+        pays: "République Démocratique du Congo",
+        ville: "Lubumbashi",
+        domaine: "Beauté et Esthétique",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=14"
+    },
+
+    {
+        nom: "Kevin Tshibangu",
+        email: "kevin.tshibangu@gmail.com",
+        telephone: "+243 815 678 505",
+        pays: "République Démocratique du Congo",
+        ville: "Goma",
+        domaine: "Finance",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=15"
+    },
+
+    {
+        nom: "Grâce Kalume",
+        email: "grace.kalume@gmail.com",
+        telephone: "+243 816 789 506",
+        pays: "République Démocratique du Congo",
+        ville: "Bukavu",
+        domaine: "Organisation d'Évènements",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=16"
+    },
+
+    {
+        nom: "Patrick Mwamba",
+        email: "patrick.mwamba@gmail.com",
+        telephone: "+243 817 890 507",
+        pays: "République Démocratique du Congo",
+        ville: "Kisangani",
+        domaine: "Entrepreneuriat",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=17"
+    },
+
+    {
+        nom: "Claudine Banza",
+        email: "claudine.banza@gmail.com",
+        telephone: "+243 818 901 508",
+        pays: "République Démocratique du Congo",
+        ville: "Kinshasa",
+        domaine: "Marketing Digital",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=18"
+    },
+
+    {
+        nom: "Jonathan Kalenga",
+        email: "jonathan.kalenga@gmail.com",
+        telephone: "+243 819 012 509",
+        pays: "République Démocratique du Congo",
+        ville: "Lubumbashi",
+        domaine: "Leadership",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=19"
+    },
+
+    {
+        nom: "Naomie Kanku",
+        email: "naomie.kanku@gmail.com",
+        telephone: "+243 810 123 510",
+        pays: "République Démocratique du Congo",
+        ville: "Kolwezi",
+        domaine: "Beauté et Esthétique",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=20"
+    },
+
+    {
+        nom: "Michel Tshisekedi",
+        email: "michel.tshisekedi@gmail.com",
+        telephone: "+243 821 234 511",
+        pays: "République Démocratique du Congo",
+        ville: "Kinshasa",
+        domaine: "Technologie et Industrialisation",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=21"
+    },
+
+    {
+        nom: "Aline Kasongo",
+        email: "aline.kasongo@gmail.com",
+        telephone: "+243 822 345 512",
+        pays: "République Démocratique du Congo",
+        ville: "Lubumbashi",
+        domaine: "Finance",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=22"
+    },
+
+    {
+        nom: "Christian Lunda",
+        email: "christian.lunda@gmail.com",
+        telephone: "+243 823 456 513",
+        pays: "République Démocratique du Congo",
+        ville: "Goma",
+        domaine: "Entrepreneuriat",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=23"
+    },
+
+    {
+        nom: "Ruth Kabongo",
+        email: "ruth.kabongo@gmail.com",
+        telephone: "+243 824 567 514",
+        pays: "République Démocratique du Congo",
+        ville: "Bukavu",
+        domaine: "Organisation d'Évènements",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=24"
+    },
+
+    {
+        nom: "Samuel Kabasele",
+        email: "samuel.kabasele@gmail.com",
+        telephone: "+243 825 678 515",
+        pays: "République Démocratique du Congo",
+        ville: "Lubumbashi",
+        domaine: "Marketing Digital",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=25"
+    },
+
+    {
+        nom: "Diane Mutombo",
+        email: "diane.mutombo@gmail.com",
+        telephone: "+243 826 789 516",
+        pays: "République Démocratique du Congo",
+        ville: "Kinshasa",
+        domaine: "Leadership",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=26"
+    },
+
+    {
+        nom: "Fabrice Kabila",
+        email: "fabrice.kabila@gmail.com",
+        telephone: "+243 827 890 517",
+        pays: "République Démocratique du Congo",
+        ville: "Kolwezi",
+        domaine: "Finance",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=27"
+    },
+
+    {
+        nom: "Merveille Lumu",
+        email: "merveille.lumu@gmail.com",
+        telephone: "+243 828 901 518",
+        pays: "République Démocratique du Congo",
+        ville: "Lubumbashi",
+        domaine: "Beauté et Esthétique",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=28"
+    },
+
+    {
+        nom: "Arnaud Bisimwa",
+        email: "arnaud.bisimwa@gmail.com",
+        telephone: "+243 829 012 519",
+        pays: "République Démocratique du Congo",
+        ville: "Goma",
+        domaine: "Technologie et Industrialisation",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=29"
+    },
+
+    {
+        nom: "Chantal Ndaya",
+        email: "chantal.ndaya@gmail.com",
+        telephone: "+243 830 123 520",
+        pays: "République Démocratique du Congo",
+        ville: "Kinshasa",
+        domaine: "Organisation d'Évènements",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=30"
+    },
+
+    {
+        nom: "Daniel Ilunga",
+        email: "daniel.ilunga@gmail.com",
+        telephone: "+243 831 234 521",
+        pays: "République Démocratique du Congo",
+        ville: "Lubumbashi",
+        domaine: "Entrepreneuriat",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=31"
+    },
+
+    {
+        nom: "Mélissa Kabwe",
+        email: "melissa.kabwe@gmail.com",
+        telephone: "+243 832 345 522",
+        pays: "République Démocratique du Congo",
+        ville: "Bukavu",
+        domaine: "Marketing Digital",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=32"
+    },
+
+    {
+        nom: "Eric Mungala",
+        email: "eric.mungala@gmail.com",
+        telephone: "+243 833 456 523",
+        pays: "République Démocratique du Congo",
+        ville: "Kisangani",
+        domaine: "Leadership",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=33"
+    },
+
+    {
+        nom: "Joséphine Kalonji",
+        email: "josephine.kalonji@gmail.com",
+        telephone: "+243 834 567 524",
+        pays: "République Démocratique du Congo",
+        ville: "Kolwezi",
+        domaine: "Finance",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=34"
+    },
+
+    {
+        nom: "Blaise Mukendi",
+        email: "blaise.mukendi@gmail.com",
+        telephone: "+243 835 678 525",
+        pays: "République Démocratique du Congo",
+        ville: "Lubumbashi",
+        domaine: "Technologie et Industrialisation",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=35"
+    },
+
+    {
+        nom: "Gloria Tshala",
+        email: "gloria.tshala@gmail.com",
+        telephone: "+243 836 789 526",
+        pays: "République Démocratique du Congo",
+        ville: "Kinshasa",
+        domaine: "Beauté et Esthétique",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=36"
+    },
+
+    {
+        nom: "Moïse Kanku",
+        email: "moise.kanku@gmail.com",
+        telephone: "+243 837 890 527",
+        pays: "République Démocratique du Congo",
+        ville: "Goma",
+        domaine: "Entrepreneuriat",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=37"
+    },
+
+    {
+        nom: "Linda Mbuyi",
+        email: "linda.mbuyi@gmail.com",
+        telephone: "+243 838 901 528",
+        pays: "République Démocratique du Congo",
+        ville: "Lubumbashi",
+        domaine: "Marketing Digital",
+        niveau: "Intermédiaire",
+        photo: "https://i.pravatar.cc/300?img=38"
+    },
+
+    {
+        nom: "Robert Kasongo",
+        email: "robert.kasongo@gmail.com",
+        telephone: "+243 839 012 529",
+        pays: "République Démocratique du Congo",
+        ville: "Kinshasa",
+        domaine: "Leadership",
+        niveau: "Avancé",
+        photo: "https://i.pravatar.cc/300?img=39"
+    },
+
+    {
+        nom: "Emmanuelle Banza",
+        email: "emmanuelle.banza@gmail.com",
+        telephone: "+243 840 123 530",
+        pays: "République Démocratique du Congo",
+        ville: "Kolwezi",
+        domaine: "Organisation d'Évènements",
+        niveau: "Débutant",
+        photo: "https://i.pravatar.cc/300?img=40"
+    }
+
+];
 // ============================================================
 // POSTGRESQL
 // ============================================================
