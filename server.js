@@ -12,7 +12,6 @@ const { Pool } = require("pg");
 
 const app = express();
 
-
 /* ============================================================
    CONFIGURATION
 ============================================================ */
@@ -27,8 +26,8 @@ const ADMIN_EMAIL =
     process.env.ADMIN_EMAIL ||
     "admin@bmjservice.com";
 
-const ADMIN_PASSWORD = 
-    process.env.ADMIN_PASSWORD || 
+const ADMIN_PASSWORD =
+    process.env.ADMIN_PASSWORD ||
     "admin123";
 
 const ADMIN_SECRET =
@@ -41,6 +40,7 @@ const pool = new Pool({
         rejectUnauthorized: false
     }
 });
+
 /* ============================================================
    MIDDLEWARE
 ============================================================ */
@@ -89,16 +89,41 @@ function tokenHash(token) {
 
 function getAdminToken(req) {
     const authorization = req.headers.authorization || "";
+
     if (authorization.startsWith("Bearer ")) {
         return authorization.substring(7).trim();
     }
+
     if (req.headers["x-admin-token"]) {
         return String(req.headers["x-admin-token"]).trim();
     }
+
     if (req.query.token) {
         return String(req.query.token).trim();
     }
+
     return null;
+}
+
+async function query(text, params = []) {
+    return pool.query(text, params);
+}
+
+async function addActivity(adminEmail, action, userId = null, details = "") {
+    try {
+        await query(`
+            INSERT INTO admin_activity
+            (admin_email, action, user_id, details)
+            VALUES ($1, $2, $3, $4)
+        `, [
+            adminEmail,
+            action,
+            userId,
+            details
+        ]);
+    } catch (e) {
+        console.error("Erreur journal admin :", e.message);
+    }
 }
 
 /* ============================================================
@@ -108,11 +133,12 @@ function getAdminToken(req) {
 const adminTokens = new Map();
 
 /* ============================================================
-   AUTH ADMIN MIDDLEWARE
+   AUTH ADMIN
 ============================================================ */
 
 function adminAuth(req, res, next) {
     const token = getAdminToken(req);
+
     if (!token) {
         return res.status(401).json({
             success: false,
@@ -121,6 +147,7 @@ function adminAuth(req, res, next) {
     }
 
     const saved = adminTokens.get(tokenHash(token));
+
     if (!saved) {
         return res.status(401).json({
             success: false,
@@ -135,10 +162,6 @@ function adminAuth(req, res, next) {
 /* ============================================================
    DATABASE
 ============================================================ */
-
-async function query(text, params = []) {
-    return pool.query(text, params);
-}
 
 async function testDatabase() {
     const result = await query("SELECT NOW() AS now");
@@ -240,7 +263,6 @@ async function initDatabase() {
         )
     `);
 
-    // Compatibilité colonnes
     const columns = [
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS premium BOOLEAN DEFAULT FALSE",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE",
@@ -250,24 +272,36 @@ async function initDatabase() {
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS certificats INTEGER DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS photo TEXT"
     ];
-    for (let colQuery of columns) {
-        try { await query(colQuery); } catch (e) {}
+
+    for (const colQuery of columns) {
+        try {
+            await query(colQuery);
+        } catch (e) {}
     }
 
     await seedDemoUsers();
+
     console.log("Base de données initialisée avec succès.");
 }
 
 async function seedDemoUsers() {
-    const countResult = await query("SELECT COUNT(*)::INTEGER AS total FROM users");
-    const currentCount = countResult.rows[0].total;
+    const result = await query(
+        "SELECT COUNT(*)::INTEGER AS total FROM users"
+    );
 
-    if (currentCount >= 10) return;
+    const currentCount = result.rows[0].total;
+
+    if (currentCount >= 10) {
+        return;
+    }
 
     for (let i = currentCount + 1; i <= 10; i++) {
         const email = `demo${i}@bmjservice.com`;
+
         await query(`
-            INSERT INTO users (nom, email, telephone, domaine, password, premium, is_premium, blocked, is_blocked)
+            INSERT INTO users
+            (nom, email, telephone, domaine, password,
+             premium, is_premium, blocked, is_blocked)
             VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $7)
             ON CONFLICT (email) DO NOTHING
         `, [
@@ -283,268 +317,984 @@ async function seedDemoUsers() {
 }
 
 /* ============================================================
-   ROUTES API COMPLÈTES
+   ROUTES GENERALES
 ============================================================ */
 
 app.get("/", (req, res) => {
-    res.json({ success: true, message: "API BMJ SERVICE en ligne" });
+    res.json({
+        success: true,
+        message: "API BMJ SERVICE en ligne"
+    });
 });
 
 app.get("/api", (req, res) => {
-    res.json({ success: true, version: "1.0.0" });
+    res.json({
+        success: true,
+        version: "1.0.0"
+    });
 });
 
 app.get("/api/health", async (req, res) => {
     try {
         const dbTime = await testDatabase();
-        res.json({ success: true, database: dbTime });
+
+        res.json({
+            success: true,
+            message: "Serveur et base de données opérationnels",
+            database: dbTime
+        });
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            message: "Base de données indisponible",
+            error: e.message
+        });
     }
 });
 
 app.get("/api/test-db", async (req, res) => {
     try {
         const dbTime = await testDatabase();
-        res.json({ success: true, time: dbTime });
+
+        res.json({
+            success: true,
+            time: dbTime
+        });
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
-// Auth Admin
-app.post("/api/admin/login", (req, res) => {
-    const { email, password } = req.body;
-    if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
-        const token = createToken();
-        adminTokens.set(tokenHash(token), { email: ADMIN_EMAIL });
-        return res.json({ success: true, token, email: ADMIN_EMAIL });
+/* ============================================================
+   INSCRIPTION UTILISATEUR
+============================================================ */
+
+app.post("/api/register", async (req, res) => {
+    try {
+        const {
+            nom,
+            email,
+            telephone,
+            domaine,
+            password,
+            photo
+        } = req.body;
+
+        if (!nom || !email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Nom, email et mot de passe obligatoires"
+            });
+        }
+
+        const cleanEmail = String(email).trim().toLowerCase();
+
+        const exists = await query(
+            "SELECT id FROM users WHERE LOWER(email) = LOWER($1)",
+            [cleanEmail]
+        );
+
+        if (exists.rows.length > 0) {
+            return res.status(409).json({
+                success: false,
+                message: "Cette adresse email existe déjà"
+            });
+        }
+
+        const result = await query(`
+            INSERT INTO users
+            (nom, email, telephone, domaine, password, photo)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id, nom, email, telephone, domaine,
+                      photo, premium, is_premium, blocked,
+                      is_blocked, certificats, created_at
+        `, [
+            String(nom).trim(),
+            cleanEmail,
+            telephone || "",
+            domaine || "",
+            hashPassword(password),
+            photo || ""
+        ]);
+
+        res.status(201).json({
+            success: true,
+            message: "Inscription réussie",
+            user: result.rows[0],
+            utilisateur: result.rows[0]
+        });
+
+    } catch (e) {
+        res.status(500).json({
+            success: false,
+            message: "Erreur lors de l'inscription",
+            error: e.message
+        });
     }
-    res.status(401).json({ success: false, message: "Identifiants administrateur invalides" });
+});
+
+/* ============================================================
+   CONNEXION UTILISATEUR
+============================================================ */
+
+app.post("/api/login", async (req, res) => {
+    try {
+        const {
+            email,
+            password
+        } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Email et mot de passe obligatoires"
+            });
+        }
+
+        const result = await query(
+            "SELECT * FROM users WHERE LOWER(email) = LOWER($1)",
+            [String(email).trim()]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(401).json({
+                success: false,
+                message: "Email ou mot de passe incorrect"
+            });
+        }
+
+        const user = result.rows[0];
+
+        if (hashPassword(password) !== user.password) {
+            return res.status(401).json({
+                success: false,
+                message: "Email ou mot de passe incorrect"
+            });
+        }
+
+        if (user.blocked === true || user.is_blocked === true) {
+            return res.status(403).json({
+                success: false,
+                message: "Ce compte est bloqué"
+            });
+        }
+
+        delete user.password;
+
+        res.json({
+            success: true,
+            message: "Connexion réussie",
+            user,
+            utilisateur: user
+        });
+
+    } catch (e) {
+        res.status(500).json({
+            success: false,
+            message: "Erreur lors de la connexion",
+            error: e.message
+        });
+    }
+});
+
+/* ============================================================
+   AUTH ADMINISTRATEUR
+============================================================ */
+
+app.post("/api/admin/login", (req, res) => {
+    try {
+        const email = String(req.body.email || "").trim();
+        const password = String(req.body.password || "");
+
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "Email et mot de passe obligatoires"
+            });
+        }
+
+        if (
+            email.toLowerCase() !==
+            String(ADMIN_EMAIL).trim().toLowerCase()
+        ) {
+            return res.status(401).json({
+                success: false,
+                message: "Email administrateur incorrect"
+            });
+        }
+
+        if (password !== String(ADMIN_PASSWORD)) {
+            return res.status(401).json({
+                success: false,
+                message: "Mot de passe administrateur incorrect"
+            });
+        }
+
+        const token = createToken();
+
+        adminTokens.set(
+            tokenHash(token),
+            {
+                email: ADMIN_EMAIL,
+                createdAt: Date.now()
+            }
+        );
+
+        console.log(
+            `Connexion administrateur réussie : ${ADMIN_EMAIL}`
+        );
+
+        res.json({
+            success: true,
+            message: "Connexion administrateur réussie",
+            token,
+            email: ADMIN_EMAIL
+        });
+
+    } catch (e) {
+        res.status(500).json({
+            success: false,
+            message: "Erreur de connexion administrateur",
+            error: e.message
+        });
+    }
 });
 
 app.get("/api/admin/session", adminAuth, (req, res) => {
-    res.json({ success: true, admin: req.admin });
+    res.json({
+        success: true,
+        admin: req.admin
+    });
 });
 
-app.delete("/api/admin/login", adminAuth, (req, res) => {
+app.delete("/api/admin/login", adminAuth, async (req, res) => {
     const token = getAdminToken(req);
-    if (token) adminTokens.delete(tokenHash(token));
-    res.json({ success: true, message: "Déconnexion réussie" });
+
+    if (token) {
+        adminTokens.delete(tokenHash(token));
+    }
+
+    await addActivity(
+        req.admin.email,
+        "Déconnexion administrateur"
+    );
+
+    res.json({
+        success: true,
+        message: "Déconnexion réussie"
+    });
 });
 
-// Utilisateurs & Apprenants
+/* ============================================================
+   UTILISATEURS ADMIN
+============================================================ */
+
 app.get("/api/admin/users", adminAuth, async (req, res) => {
     try {
-        const result = await query("SELECT * FROM users ORDER BY id DESC");
-        res.json({ success: true, users: result.rows });
+        const result = await query(
+            "SELECT * FROM users ORDER BY id DESC"
+        );
+
+        res.json({
+            success: true,
+            users: result.rows,
+            utilisateurs: result.rows,
+            total: result.rows.length
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            message: "Impossible de récupérer les utilisateurs",
+            error: e.message
+        });
     }
 });
 
 app.get("/api/admin/utilisateurs", adminAuth, async (req, res) => {
     try {
-        const result = await query("SELECT * FROM users ORDER BY id DESC");
-        res.json({ success: true, utilisateurs: result.rows });
+        const result = await query(
+            "SELECT * FROM users ORDER BY id DESC"
+        );
+
+        res.json({
+            success: true,
+            utilisateurs: result.rows,
+            users: result.rows,
+            total: result.rows.length
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            message: "Impossible de récupérer les utilisateurs",
+            error: e.message
+        });
     }
 });
 
 app.get("/api/apprenants", async (req, res) => {
     try {
-        const result = await query("SELECT * FROM users ORDER BY id DESC");
-        res.json({ success: true, apprenants: result.rows });
+        const result = await query(
+            "SELECT * FROM users ORDER BY id DESC"
+        );
+
+        res.json({
+            success: true,
+            apprenants: result.rows,
+            utilisateurs: result.rows,
+            total: result.rows.length
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
 app.get("/api/utilisateurs/:id", async (req, res) => {
     try {
-        const result = await query("SELECT * FROM users WHERE id = $1", [req.params.id]);
-        if (result.rows.length === 0) return res.status(404).json({ success: false, message: "Utilisateur introuvable" });
-        res.json({ success: true, utilisateur: result.rows[0] });
+        const result = await query(
+            "SELECT * FROM users WHERE id = $1",
+            [req.params.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Utilisateur introuvable"
+            });
+        }
+
+        res.json({
+            success: true,
+            utilisateur: result.rows[0],
+            user: result.rows[0]
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
+/* ============================================================
+   BLOCAGE / DEBLOCAGE
+============================================================ */
+
 app.patch("/api/admin/users/:id/block", adminAuth, async (req, res) => {
     try {
-        await query("UPDATE users SET blocked = TRUE, is_blocked = TRUE WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Utilisateur bloqué" });
+        await query(`
+            UPDATE users
+            SET blocked = TRUE,
+                is_blocked = TRUE,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+        `, [req.params.id]);
+
+        await addActivity(
+            req.admin.email,
+            "Blocage utilisateur",
+            req.params.id,
+            "Utilisateur bloqué"
+        );
+
+        res.json({
+            success: true,
+            message: "Utilisateur bloqué"
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
 app.patch("/api/admin/users/:id/unblock", adminAuth, async (req, res) => {
     try {
-        await query("UPDATE users SET blocked = FALSE, is_blocked = FALSE WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Utilisateur débloqué" });
+        await query(`
+            UPDATE users
+            SET blocked = FALSE,
+                is_blocked = FALSE,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+        `, [req.params.id]);
+
+        await addActivity(
+            req.admin.email,
+            "Déblocage utilisateur",
+            req.params.id,
+            "Utilisateur débloqué"
+        );
+
+        res.json({
+            success: true,
+            message: "Utilisateur débloqué"
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
+/* ============================================================
+   PREMIUM / STANDARD
+============================================================ */
+
 app.patch("/api/admin/users/:id/premium", adminAuth, async (req, res) => {
     try {
-        await query("UPDATE users SET premium = TRUE, is_premium = TRUE WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Passé en premium" });
+        await query(`
+            UPDATE users
+            SET premium = TRUE,
+                is_premium = TRUE,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+        `, [req.params.id]);
+
+        await addActivity(
+            req.admin.email,
+            "Activation Premium",
+            req.params.id,
+            "Utilisateur passé en Premium"
+        );
+
+        res.json({
+            success: true,
+            message: "Utilisateur passé en Premium"
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
 app.patch("/api/admin/users/:id/standard", adminAuth, async (req, res) => {
     try {
-        await query("UPDATE users SET premium = FALSE, is_premium = FALSE WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Passé en standard" });
+        await query(`
+            UPDATE users
+            SET premium = FALSE,
+                is_premium = FALSE,
+                premium_until = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+        `, [req.params.id]);
+
+        await addActivity(
+            req.admin.email,
+            "Désactivation Premium",
+            req.params.id,
+            "Utilisateur repassé en Standard"
+        );
+
+        res.json({
+            success: true,
+            message: "Utilisateur passé en Standard"
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
+
+/* ============================================================
+   CERTIFICAT
+============================================================ */
 
 app.patch("/api/admin/users/:id/certificate", adminAuth, async (req, res) => {
     try {
-        await query("UPDATE users SET certificats = certificats + 1 WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Certificat accordé" });
+        await query(`
+            UPDATE users
+            SET certificats = COALESCE(certificats, 0) + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+        `, [req.params.id]);
+
+        await addActivity(
+            req.admin.email,
+            "Certificat accordé",
+            req.params.id,
+            "Un certificat a été accordé"
+        );
+
+        res.json({
+            success: true,
+            message: "Certificat accordé"
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
-// Paiements & Demandes
+/* ============================================================
+   PAIEMENTS
+============================================================ */
+
 app.get("/api/paiements", async (req, res) => {
     try {
-        const result = await query("SELECT * FROM paiements ORDER BY id DESC");
-        res.json({ success: true, paiements: result.rows });
+        const result = await query(
+            "SELECT * FROM paiements ORDER BY id DESC"
+        );
+
+        res.json({
+            success: true,
+            paiements: result.rows,
+            total: result.rows.length
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
 app.post("/api/paiements", async (req, res) => {
     try {
-        const { user_id, montant, methode, reference } = req.body;
+        const {
+            user_id,
+            montant,
+            methode,
+            reference
+        } = req.body;
+
         const result = await query(`
-            INSERT INTO paiements (user_id, montant, methode, reference, statut)
-            VALUES ($1, $2, $3, $4, 'pending') RETURNING *
-        `, [user_id, montant, methode, reference]);
-        res.json({ success: true, paiement: result.rows[0] });
+            INSERT INTO paiements
+            (user_id, montant, methode, reference, statut)
+            VALUES ($1, $2, $3, $4, 'pending')
+            RETURNING *
+        `, [
+            user_id,
+            montant || 0,
+            methode || "",
+            reference || ""
+        ]);
+
+        res.status(201).json({
+            success: true,
+            paiement: result.rows[0]
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
+/* ============================================================
+   DEMANDES DE PAIEMENT
+============================================================ */
+
 app.get("/api/demandes-paiement", async (req, res) => {
     try {
-        const result = await query("SELECT * FROM demandes_paiement ORDER BY id DESC");
-        res.json({ success: true, demandes: result.rows });
+        const result = await query(`
+            SELECT
+                d.*,
+                u.nom AS utilisateur_nom,
+                u.email AS utilisateur_email
+            FROM demandes_paiement d
+            LEFT JOIN users u ON u.id = d.user_id
+            ORDER BY d.id DESC
+        `);
+
+        res.json({
+            success: true,
+            demandes: result.rows,
+            demandes_paiement: result.rows,
+            total: result.rows.length
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
 app.post("/api/demandes-paiement", async (req, res) => {
     try {
-        const { user_id, telephone_paiement, reference_paiement, montant, methode } = req.body;
+        const {
+            user_id,
+            telephone_paiement,
+            reference_paiement,
+            montant,
+            methode
+        } = req.body;
+
         const result = await query(`
-            INSERT INTO demandes_paiement (user_id, telephone_paiement, reference_paiement, montant, methode, statut)
-            VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING *
-        `, [user_id, telephone_paiement, reference_paiement, montant, methode]);
-        res.json({ success: true, demande: result.rows[0] });
+            INSERT INTO demandes_paiement
+            (user_id, telephone_paiement, reference_paiement,
+             montant, methode, statut)
+            VALUES ($1, $2, $3, $4, $5, 'pending')
+            RETURNING *
+        `, [
+            user_id,
+            telephone_paiement || "",
+            reference_paiement || "",
+            montant || 0,
+            methode || ""
+        ]);
+
+        res.status(201).json({
+            success: true,
+            demande: result.rows[0]
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
-app.patch("/api/demandes-paiement/:id/valider", adminAuth, async (req, res) => {
-    try {
-        await query("UPDATE demandes_paiement SET statut = 'valide' WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Demande validée" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
+/* ============================================================
+   VALIDATION PAIEMENT + PREMIUM
+============================================================ */
 
-app.patch("/api/demandes-paiement/:id/refuser", adminAuth, async (req, res) => {
-    try {
-        await query("UPDATE demandes_paiement SET statut = 'refuse' WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Demande refusée" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
+app.patch(
+    "/api/demandes-paiement/:id/valider",
+    adminAuth,
+    async (req, res) => {
+        try {
+            const demande = await query(`
+                SELECT * FROM demandes_paiement
+                WHERE id = $1
+            `, [req.params.id]);
 
-// Statistiques & Activités
+            if (demande.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Demande de paiement introuvable"
+                });
+            }
+
+            const data = demande.rows[0];
+
+            await query(`
+                UPDATE demandes_paiement
+                SET statut = 'valide',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+            `, [req.params.id]);
+
+            if (data.user_id) {
+                await query(`
+                    UPDATE users
+                    SET premium = TRUE,
+                        is_premium = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                `, [data.user_id]);
+            }
+
+            await addActivity(
+                req.admin.email,
+                "Paiement validé",
+                data.user_id,
+                `Demande ${req.params.id} validée et Premium activé`
+            );
+
+            res.json({
+                success: true,
+                message: "Demande validée et Premium activé"
+            });
+
+        } catch (e) {
+            res.status(500).json({
+                success: false,
+                error: e.message
+            });
+        }
+    }
+);
+
+/* ============================================================
+   REFUS PAIEMENT
+============================================================ */
+
+app.patch(
+    "/api/demandes-paiement/:id/refuser",
+    adminAuth,
+    async (req, res) => {
+        try {
+            const demande = await query(`
+                SELECT * FROM demandes_paiement
+                WHERE id = $1
+            `, [req.params.id]);
+
+            if (demande.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Demande de paiement introuvable"
+                });
+            }
+
+            await query(`
+                UPDATE demandes_paiement
+                SET statut = 'refuse',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+            `, [req.params.id]);
+
+            await addActivity(
+                req.admin.email,
+                "Paiement refusé",
+                demande.rows[0].user_id,
+                `Demande ${req.params.id} refusée`
+            );
+
+            res.json({
+                success: true,
+                message: "Demande refusée"
+            });
+
+        } catch (e) {
+            res.status(500).json({
+                success: false,
+                error: e.message
+            });
+        }
+    }
+);
+
+/* ============================================================
+   STATISTIQUES ADMIN
+============================================================ */
+
 app.get("/api/admin/statistiques", adminAuth, async (req, res) => {
     try {
-        const usersCount = await query("SELECT COUNT(*)::INTEGER AS total FROM users");
-        const paymentsCount = await query("SELECT COUNT(*)::INTEGER AS total FROM paiements WHERE statut = 'valide'");
+        const users = await query(`
+            SELECT COUNT(*)::INTEGER AS total
+            FROM users
+        `);
+
+        const premium = await query(`
+            SELECT COUNT(*)::INTEGER AS total
+            FROM users
+            WHERE premium = TRUE OR is_premium = TRUE
+        `);
+
+        const blocked = await query(`
+            SELECT COUNT(*)::INTEGER AS total
+            FROM users
+            WHERE blocked = TRUE OR is_blocked = TRUE
+        `);
+
+        const payments = await query(`
+            SELECT COUNT(*)::INTEGER AS total
+            FROM paiements
+            WHERE LOWER(statut) = 'valide'
+        `);
+
+        const pending = await query(`
+            SELECT COUNT(*)::INTEGER AS total
+            FROM demandes_paiement
+            WHERE LOWER(statut) = 'pending'
+        `);
+
+        const certificates = await query(`
+            SELECT COALESCE(SUM(certificats), 0)::INTEGER AS total
+            FROM users
+        `);
+
         res.json({
             success: true,
             stats: {
-                users: usersCount.rows[0].total,
-                payments: paymentsCount.rows[0].total
+                users: users.rows[0].total,
+                utilisateurs: users.rows[0].total,
+                premium: premium.rows[0].total,
+                blocked: blocked.rows[0].total,
+                payments: payments.rows[0].total,
+                pendingPayments: pending.rows[0].total,
+                demandes: pending.rows[0].total,
+                certificates: certificates.rows[0].total
             }
         });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            message: "Impossible de récupérer les statistiques",
+            error: e.message
+        });
     }
 });
+
+/* ============================================================
+   ACTIVITES ADMIN
+============================================================ */
 
 app.get("/api/admin/activites", adminAuth, async (req, res) => {
     try {
-        const result = await query("SELECT * FROM admin_activity ORDER BY id DESC LIMIT 50");
-        res.json({ success: true, activites: result.rows });
+        const result = await query(`
+            SELECT *
+            FROM admin_activity
+            ORDER BY id DESC
+            LIMIT 50
+        `);
+
+        res.json({
+            success: true,
+            activites: result.rows,
+            activities: result.rows
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
-// Messagerie
+/* ============================================================
+   MESSAGERIE
+============================================================ */
+
 app.get("/api/messages", async (req, res) => {
     try {
-        const result = await query("SELECT * FROM messages ORDER BY id DESC");
-        res.json({ success: true, messages: result.rows });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-app.post("/api/admin/messages/reply", adminAuth, async (req, res) => {
-    try {
-        const { userId, message } = req.body;
         const result = await query(`
-            INSERT INTO messages (user_id, sender_type, content)
-            VALUES ($1, 'admin', $2) RETURNING *
-        `, [userId, message]);
-        res.json({ success: true, message: result.rows[0] });
+            SELECT *
+            FROM messages
+            ORDER BY id DESC
+        `);
+
+        res.json({
+            success: true,
+            messages: result.rows
+        });
+
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message
+        });
     }
 });
 
-// Liste des routes globales demandée au début
+app.post(
+    "/api/admin/messages/reply",
+    adminAuth,
+    async (req, res) => {
+        try {
+            const {
+                userId,
+                message
+            } = req.body;
+
+            if (!message || !String(message).trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Le message est obligatoire"
+                });
+            }
+
+            const result = await query(`
+                INSERT INTO messages
+                (user_id, sender_type, sender_id, content)
+                VALUES ($1, 'admin', NULL, $2)
+                RETURNING *
+            `, [
+                userId || null,
+                String(message).trim()
+            ]);
+
+            await addActivity(
+                req.admin.email,
+                "Message envoyé",
+                userId || null,
+                "Réponse administrateur envoyée"
+            );
+
+            res.json({
+                success: true,
+                message: result.rows[0]
+            });
+
+        } catch (e) {
+            res.status(500).json({
+                success: false,
+                error: e.message
+            });
+        }
+    }
+);
+
+/* ============================================================
+   ROUTES DISPONIBLES
+============================================================ */
+
 app.get("/api/routes", async (req, res) => {
     res.json({
         success: true,
         routes: [
-            "GET /", "GET /api", "GET /api/health", "GET /api/test-db",
-            "POST /api/register", "POST /api/login",
-            "POST /api/admin/login", "GET /api/admin/session",
-            "GET /api/admin/users", "GET /api/admin/utilisateurs", "GET /api/apprenants",
-            "GET /api/utilisateurs/:id", "PATCH /api/admin/users/:id",
-            "PATCH /api/admin/users/:id/block", "PATCH /api/admin/users/:id/unblock",
-            "PATCH /api/admin/users/:id/premium", "PATCH /api/admin/users/:id/standard",
-            "PATCH /api/admin/users/:id/certificate", "POST /api/paiements",
-            "GET /api/paiements", "POST /api/demandes-paiement", "GET /api/demandes-paiement",
-            "PATCH /api/demandes-paiement/:id/valider", "PATCH /api/demandes-paiement/:id/refuser",
-            "GET /api/admin/statistiques", "GET /api/admin/activites", "GET /api/messages"
+            "GET /",
+            "GET /api",
+            "GET /api/health",
+            "GET /api/test-db",
+            "POST /api/register",
+            "POST /api/login",
+            "POST /api/admin/login",
+            "GET /api/admin/session",
+            "DELETE /api/admin/login",
+            "GET /api/admin/users",
+            "GET /api/admin/utilisateurs",
+            "GET /api/apprenants",
+            "GET /api/utilisateurs/:id",
+            "PATCH /api/admin/users/:id/block",
+            "PATCH /api/admin/users/:id/unblock",
+            "PATCH /api/admin/users/:id/premium",
+            "PATCH /api/admin/users/:id/standard",
+            "PATCH /api/admin/users/:id/certificate",
+            "GET /api/paiements",
+            "POST /api/paiements",
+            "GET /api/demandes-paiement",
+            "POST /api/demandes-paiement",
+            "PATCH /api/demandes-paiement/:id/valider",
+            "PATCH /api/demandes-paiement/:id/refuser",
+            "GET /api/admin/statistiques",
+            "GET /api/admin/activites",
+            "GET /api/messages",
+            "POST /api/admin/messages/reply"
         ]
+    });
+});
+
+/* ============================================================
+   GESTION DES ERREURS
+============================================================ */
+
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        message: "Route introuvable",
+        path: req.originalUrl
     });
 });
 
@@ -555,9 +1305,24 @@ app.get("/api/routes", async (req, res) => {
 initDatabase()
     .then(() => {
         app.listen(PORT, () => {
-            console.log(`Serveur démarré sur le port ${PORT}`);
+            console.log(
+                `Serveur BMJ SERVICE démarré sur le port ${PORT}`
+            );
+            console.log(
+                `Admin configuré : ${ADMIN_EMAIL}`
+            );
+            console.log(
+                `Mot de passe admin configuré : ${Boolean(ADMIN_PASSWORD)}`
+            );
+            console.log(
+                `Secret admin configuré : ${Boolean(ADMIN_SECRET)}`
+            );
         });
     })
     .catch((err) => {
-        console.error("Erreur critique au démarrage :", err);
+        console.error(
+            "Erreur critique au démarrage :",
+            err
+        );
+        process.exit(1);
     });
