@@ -1,9 +1,6 @@
 /* ============================================================
-   BMJ SERVICE - BACKEND COMPLET ET OPTIMISÉ
-   Node.js + Express + PostgreSQL
+   BMJ SERVICE - SERVEUR BACKEND COMPLET (EXPRESS & POSTGRESQL)
 ============================================================ */
-
-require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
@@ -13,7 +10,7 @@ const { Pool } = require("pg");
 const app = express();
 
 /* ============================================================
-   CONFIGURATION (Identifiants intégrés directement en dur)
+   CONFIGURATION & CONNEXION BASE DE DONNÉES
 ============================================================ */
 
 const PORT = process.env.PORT || 10000;
@@ -22,10 +19,9 @@ const DATABASE_URL =
     process.env.DATABASE_URL ||
     "postgresql://name_bmj_db_user:TjgoLRbYV0LizRgBFD1nepGqSqErgBgD@dpg-dagn0e15efls73b8rjh0-a/name_bmj_db";
 
-// Identifiants admin intégrés directement (priorité absolue dans le code, sans passer par les variables d'environnement de Render)
+// Identifiants administrateur intégrés en dur directement dans le serveur
 const ADMIN_EMAIL = "admin@bmjservice.com";
 const ADMIN_PASSWORD = "admin123";
-
 const ADMIN_SECRET = "BMJ_ADMIN_SECRET_CHANGE_ME_2026";
 
 const pool = new Pool({
@@ -36,7 +32,7 @@ const pool = new Pool({
 });
 
 /* ============================================================
-   MIDDLEWARE
+   MIDDLEWARES
 ============================================================ */
 
 app.use(cors({
@@ -49,7 +45,49 @@ app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 /* ============================================================
-   OUTILS DE CHIFFREMENT ET AUTHENTIFICATION
+   INITIALISATION AUTOMATIQUE DES TABLES POSTGRESQL
+============================================================ */
+
+async function initDatabase() {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                nom VARCHAR(255),
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                is_premium BOOLEAN DEFAULT FALSE,
+                is_blocked BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS demandes_paiement (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                telephone_paiement VARCHAR(50),
+                montant NUMERIC(10, 2) NOT NULL,
+                methode VARCHAR(50) NOT NULL,
+                statut VARCHAR(50) DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_activity (
+                id SERIAL PRIMARY KEY,
+                action TEXT NOT NULL,
+                admin_email VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        console.log("Tables PostgreSQL vérifiées / créées avec succès.");
+    } catch (err) {
+        console.error("Erreur lors de l'initialisation des tables PostgreSQL :", err);
+    }
+}
+
+initDatabase();
+
+/* ============================================================
+   OUTILS DE CHIFFREMENT ET AUTHENTIFICATION ADMIN
 ============================================================ */
 
 function hashPassword(password) {
@@ -106,404 +144,199 @@ function adminAuth(req, res, next) {
     req.admin = saved;
     next();
 }
-/* ============================================================
-   GESTION BASE DE DONNÉES & INITIALISATION
-============================================================ */
-
-async function query(text, params = []) {
-    return pool.query(text, params);
-}
-
-async function testDatabase() {
-    const result = await query("SELECT NOW() AS now");
-    return result.rows[0];
-}
-
-async function initDatabase() {
-    // 1. Création des tables principales si elles n'existent pas
-    await query(`
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            nom VARCHAR(150),
-            email VARCHAR(255) UNIQUE NOT NULL,
-            telephone VARCHAR(50),
-            domaine VARCHAR(150),
-            password TEXT,
-            photo TEXT,
-            premium BOOLEAN DEFAULT FALSE,
-            is_premium BOOLEAN DEFAULT FALSE,
-            premium_until TIMESTAMP NULL,
-            blocked BOOLEAN DEFAULT FALSE,
-            is_blocked BOOLEAN DEFAULT FALSE,
-            certificats INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS paiements (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER,
-            montant NUMERIC(12,2) DEFAULT 0,
-            methode VARCHAR(100),
-            reference VARCHAR(255),
-            statut VARCHAR(50) DEFAULT 'pending',
-            reason TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS demandes_paiement (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER,
-            telephone_paiement VARCHAR(100),
-            reference_paiement VARCHAR(255),
-            montant NUMERIC(12,2) DEFAULT 0,
-            methode VARCHAR(100),
-            statut VARCHAR(50) DEFAULT 'pending',
-            reason TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS course_progress (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            domaine VARCHAR(150),
-            progression INTEGER DEFAULT 0,
-            lessons_completed INTEGER DEFAULT 0,
-            total_lessons INTEGER DEFAULT 0,
-            last_lesson TEXT,
-            title TEXT,
-            completed BOOLEAN DEFAULT FALSE,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(user_id, domaine)
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER,
-            sender_type VARCHAR(50) DEFAULT 'admin',
-            sender_id INTEGER,
-            content TEXT NOT NULL,
-            priority VARCHAR(30) DEFAULT 'normal',
-            read BOOLEAN DEFAULT FALSE,
-            reply_to INTEGER NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS admin_activity (
-            id SERIAL PRIMARY KEY,
-            admin_email VARCHAR(255),
-            action VARCHAR(150),
-            user_id INTEGER NULL,
-            details TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-
-    // 2. Assurer la compatibilité avec toutes les anciennes colonnes
-    const alterations = [
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS premium BOOLEAN DEFAULT FALSE",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT FALSE",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS premium_until TIMESTAMP NULL",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT FALSE",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS certificats INTEGER DEFAULT 0",
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS photo TEXT"
-    ];
-
-    for (const alt of alterations) {
-        try { await query(alt); } catch (e) {}
-    }
-
-    // 3. Injection / Intégration des anciennes et nouvelles données (Seeding complet)
-    await seedAllData();
-
-    console.log("Base de données initialisée et synchronisée avec succès.");
-}
-
-async function seedAllData() {
-    // Insertion de données de test enrichies (anciens + nouveaux profils réalistes)
-    const seedProfiles = [
-        { nom: "Christian Mwamba", email: "christian.mwamba@bmjservice.com", tel: "+243991234567", domaine: "Informatique", premium: true, certificats: 2 },
-        { nom: "Sarah Tshilombo", email: "sarah.tshilombo@bmjservice.com", tel: "+243818901234", domaine: "Marketing", premium: false, certificats: 1 },
-        { nom: "Héritier Kabuya", email: "heritier.kabuya@bmjservice.com", tel: "+243975432109", domaine: "Entrepreneuriat", premium: true, certificats: 3 },
-        { nom: "Grace Mutombo", email: "grace.mutombo@bmjservice.com", tel: "+243823456789", domaine: "IA", premium: false, certificats: 0 },
-        { nom: "Patient Ilunga", email: "patient.ilunga@bmjservice.com", tel: "+243998877665", domaine: "Finance", premium: true, certificats: 4 }
-    ];
-
-    for (const p of seedProfiles) {
-        await query(`
-            INSERT INTO users (nom, email, telephone, domaine, password, premium, is_premium, certificats)
-            VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
-            ON CONFLICT (email) DO NOTHING
-        `, [p.nom, p.email, p.tel, p.domaine, hashPassword("123456"), p.premium, p.certificats]);
-    }
-
-    // Génération automatique d'utilisateurs démo supplémentaires (jusqu'à 20) si la table est vide ou incomplète
-    const countRes = await query("SELECT COUNT(*)::INTEGER AS total FROM users");
-    const currentTotal = countRes.rows[0].total;
-
-    if (currentTotal < 20) {
-        for (let i = currentTotal + 1; i <= 20; i++) {
-            const email = `apprenant${i}@bmjservice.com`;
-            await query(`
-                INSERT INTO users (nom, email, telephone, domaine, password, premium, is_premium, certificats)
-                VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
-                ON CONFLICT (email) DO NOTHING
-            `, [
-                `Apprenant Test ${i}`,
-                email,
-                `+243890000${String(i).padStart(2, "0")}`,
-                ["Informatique", "Marketing", "Leadership", "Finance", "Entrepreneuriat", "IA"][i % 6],
-                hashPassword("123456"),
-                i % 3 === 0,
-                i % 4 === 0 ? 1 : 0
-            ]);
-        }
-    }
-
-    // Ajout de quelques demandes de paiement par défaut si la table est vide
-    const payCheck = await query("SELECT COUNT(*)::INTEGER AS total FROM demandes_paiement");
-    if (payCheck.rows[0].total === 0) {
-        await query(`
-            INSERT INTO demandes_paiement (user_id, telephone_paiement, reference_paiement, montant, methode, statut)
-            VALUES 
-            (1, '+243991234567', 'REF-BMJ-99881', 15.00, 'Airtel Money', 'pending'),
-            (2, '+243818901234', 'REF-BMJ-55432', 25.00, 'Orange Money', 'pending'),
-            (3, '+243975432109', 'REF-BMJ-77123', 15.00, 'M-Pesa', 'valide')
-        `);
-    }
-}
 
 /* ============================================================
-   ROUTES API COMPLÈTES & ROBUSTES
+   ROUTES API : AUTHENTIFICATION ADMIN (Intégrée au serveur)
 ============================================================ */
 
-app.get("/", (req, res) => {
-    res.json({ success: true, message: "API BMJ SERVICE active et opérationnelle." });
-});
-
-app.get("/api", (req, res) => {
-    res.json({ success: true, version: "2.0.0", service: "BMJ Backend" });
-});
-
-app.get("/api/health", async (req, res) => {
+app.post("/api/admin/login", async (req, res) => {
     try {
-        const dbTime = await testDatabase();
-        res.json({ success: true, database: dbTime, status: "healthy" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
+        const { email, password } = req.body;
 
-// Authentification Admin
-app.post("/api/admin/login", (req, res) => {
-    const { email, password } = req.body;
-    if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+        if (!email || !password || email.trim() !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) {
+            return res.status(401).json({
+                success: false,
+                message: "Email ou mot de passe administrateur incorrect"
+            });
+        }
+
         const token = createToken();
-        adminTokens.set(tokenHash(token), { email: ADMIN_EMAIL });
-        return res.json({ success: true, token, email: ADMIN_EMAIL, message: "Connexion réussie" });
+        const hashed = tokenHash(token);
+
+        adminTokens.set(hashed, {
+            email: ADMIN_EMAIL,
+            loginAt: new Date()
+        });
+
+        return res.json({
+            success: true,
+            token: token,
+            message: "Connexion administrateur réussie"
+        });
+    } catch (err) {
+        console.error("Erreur login admin:", err);
+        return res.status(500).json({
+            success: false,
+            message: "Erreur interne du serveur"
+        });
     }
-    res.status(401).json({ success: false, message: "Email ou mot de passe administrateur incorrect" });
 });
 
 app.get("/api/admin/session", adminAuth, (req, res) => {
-    res.json({ success: true, admin: req.admin });
+    return res.json({
+        success: true,
+        admin: req.admin
+    });
 });
 
 app.delete("/api/admin/login", adminAuth, (req, res) => {
     const token = getAdminToken(req);
-    if (token) adminTokens.delete(tokenHash(token));
-    res.json({ success: true, message: "Déconnexion effectuée" });
+    if (token) {
+        adminTokens.delete(tokenHash(token));
+    }
+    return res.json({
+        success: true,
+        message: "Déconnexion réussie"
+    });
 });
 
-// Gestion des Utilisateurs / Apprenants
+/* ============================================================
+   ROUTES API : GESTION DES UTILISATEURS (ADMIN)
+============================================================ */
+
 app.get("/api/admin/users", adminAuth, async (req, res) => {
     try {
-        const result = await query("SELECT * FROM users ORDER BY id DESC");
-        res.json({ success: true, users: result.rows });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        const result = await pool.query("SELECT id, nom, email, is_premium, is_blocked, created_at FROM users ORDER BY id DESC");
+        return res.json({ success: true, users: result.rows });
+    } catch (err) {
+        console.error("Erreur récupération utilisateurs:", err);
+        return res.status(500).json({ success: false, message: "Erreur base de données" });
     }
 });
 
-app.get("/api/admin/utilisateurs", adminAuth, async (req, res) => {
-    try {
-        const result = await query("SELECT * FROM users ORDER BY id DESC");
-        res.json({ success: true, utilisateurs: result.rows });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-app.get("/api/apprenants", async (req, res) => {
-    try {
-        const result = await query("SELECT * FROM users ORDER BY id DESC");
-        res.json({ success: true, apprenants: result.rows });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-app.get("/api/utilisateurs/:id", async (req, res) => {
-    try {
-        const result = await query("SELECT * FROM users WHERE id = $1", [req.params.id]);
-        if (result.rows.length === 0) return res.status(404).json({ success: false, message: "Utilisateur introuvable" });
-        res.json({ success: true, utilisateur: result.rows[0] });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-// Actions Admin sur les utilisateurs
 app.patch("/api/admin/users/:id/block", adminAuth, async (req, res) => {
     try {
-        await query("UPDATE users SET blocked = TRUE, is_blocked = TRUE WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Utilisateur bloqué avec succès" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        const { id } = req.params;
+        await pool.query("UPDATE users SET is_blocked = TRUE WHERE id = $1", [id]);
+        return res.json({ success: true, message: "Utilisateur bloqué avec succès" });
+    } catch (err) {
+        console.error("Erreur blocage utilisateur:", err);
+        return res.status(500).json({ success: false, message: "Erreur serveur" });
     }
 });
 
 app.patch("/api/admin/users/:id/unblock", adminAuth, async (req, res) => {
     try {
-        await query("UPDATE users SET blocked = FALSE, is_blocked = FALSE WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Utilisateur débloqué avec succès" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        const { id } = req.params;
+        await pool.query("UPDATE users SET is_blocked = FALSE WHERE id = $1", [id]);
+        return res.json({ success: true, message: "Utilisateur débloqué avec succès" });
+    } catch (err) {
+        console.error("Erreur déblocage utilisateur:", err);
+        return res.status(500).json({ success: false, message: "Erreur serveur" });
     }
 });
 
-app.patch("/api/admin/users/:id/premium", adminAuth, async (req, res) => {
-    try {
-        await query("UPDATE users SET premium = TRUE, is_premium = TRUE WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Statut Premium activé" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-app.patch("/api/admin/users/:id/standard", adminAuth, async (req, res) => {
-    try {
-        await query("UPDATE users SET premium = FALSE, is_premium = FALSE WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Statut Standard appliqué" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-// Paiements et Demandes de paiement
-app.get("/api/paiements", async (req, res) => {
-    try {
-        const result = await query("SELECT * FROM paiements ORDER BY id DESC");
-        res.json({ success: true, paiements: result.rows });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
+/* ============================================================
+   ROUTES API : GESTION DES PAIEMENTS & STATISTIQUES
+============================================================ */
 
 app.get("/api/demandes-paiement", async (req, res) => {
     try {
-        const result = await query("SELECT * FROM demandes_paiement ORDER BY id DESC");
-        res.json({ success: true, demandes: result.rows });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-app.post("/api/demandes-paiement", async (req, res) => {
-    try {
-        const { user_id, telephone_paiement, reference_paiement, montant, methode } = req.body;
-        const result = await query(`
-            INSERT INTO demandes_paiement (user_id, telephone_paiement, reference_paiement, montant, methode, statut)
-            VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING *
-        `, [user_id || 1, telephone_paiement, reference_paiement, montant, methode]);
-        res.json({ success: true, demande: result.rows[0] });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        const result = await pool.query("SELECT * FROM demandes_paiement ORDER BY id DESC");
+        return res.json({ success: true, demandes: result.rows });
+    } catch (err) {
+        console.error("Erreur récupération demandes paiement:", err);
+        return res.json({ success: true, demandes: [] });
     }
 });
 
 app.patch("/api/demandes-paiement/:id/valider", adminAuth, async (req, res) => {
     try {
-        await query("UPDATE demandes_paiement SET statut = 'valide' WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Demande de paiement validée" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        const { id } = req.params;
+        const updateRes = await pool.query(
+            "UPDATE demandes_paiement SET statut = 'valide' WHERE id = $1 RETURNING user_id",
+            [id]
+        );
+        
+        if (updateRes.rows.length > 0) {
+            const userId = updateRes.rows[0].user_id;
+            if (userId) {
+                await pool.query("UPDATE users SET is_premium = TRUE WHERE id = $1", [userId]);
+            }
+        }
+
+        return res.json({ success: true, message: "Demande validée et utilisateur passé en Premium" });
+    } catch (err) {
+        console.error("Erreur validation paiement:", err);
+        return res.status(500).json({ success: false, message: "Erreur serveur" });
     }
 });
 
-app.patch("/api/demandes-paiement/:id/refuser", adminAuth, async (req, res) => {
-    try {
-        await query("UPDATE demandes_paiement SET statut = 'refuse' WHERE id = $1", [req.params.id]);
-        res.json({ success: true, message: "Demande de paiement refusée" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-// Statistiques et Activités Administratives
 app.get("/api/admin/statistiques", adminAuth, async (req, res) => {
     try {
-        const usersCount = await query("SELECT COUNT(*)::INTEGER AS total FROM users");
-        const paymentsCount = await query("SELECT COUNT(*)::INTEGER AS total FROM demandes_paiement WHERE statut = 'valide'");
-        const pendingCount = await query("SELECT COUNT(*)::INTEGER AS total FROM demandes_paiement WHERE statut = 'pending'");
-        res.json({
+        const paymentsResult = await pool.query("SELECT COUNT(*) FROM demandes_paiement");
+        const usersResult = await pool.query("SELECT COUNT(*) FROM users");
+        return res.json({
             success: true,
             stats: {
-                users: usersCount.rows[0].total,
-                payments: paymentsCount.rows[0].total,
-                pending: pendingCount.rows[0].total
+                users: parseInt(usersResult.rows[0].count || 0),
+                payments: parseInt(paymentsResult.rows[0].count || 0)
             }
         });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+    } catch (err) {
+        console.error("Erreur récupération statistiques:", err);
+        return res.json({ success: true, stats: { users: 0, payments: 0 } });
     }
 });
 
-app.get("/api/messages", async (req, res) => {
+/* ============================================================
+   ROUTES PUBLIQUES (INSCRIPTION / CONNEXION UTILISATEURS)
+============================================================ */
+
+app.post("/api/register", async (req, res) => {
     try {
-        const result = await query("SELECT * FROM messages ORDER BY id DESC");
-        res.json({ success: true, messages: result.rows });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        const { nom, email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ success: false, message: "Email et mot de passe requis" });
+        }
+        const hashedPassword = hashPassword(password);
+        const result = await pool.query(
+            "INSERT INTO users (nom, email, password) VALUES ($1, $2, $3) RETURNING id, nom, email, is_premium, is_blocked",
+            [nom || "Client", email, hashedPassword]
+        );
+        return res.json({ success: true, user: result.rows[0] });
+    } catch (err) {
+        console.error("Erreur inscription:", err);
+        return res.status(500).json({ success: false, message: "Erreur lors de l'inscription (Email peut-être déjà utilisé)" });
     }
 });
 
-// Route globale de listing d'API
-app.get("/api/routes", async (req, res) => {
-    res.json({
-        success: true,
-        endpoints: [
-            "GET /", "GET /api/health", "POST /api/admin/login",
-            "GET /api/admin/users", "GET /api/apprenants",
-            "GET /api/demandes-paiement", "POST /api/demandes-paiement",
-            "PATCH /api/demandes-paiement/:id/valider", "GET /api/admin/statistiques"
-        ]
-    });
+app.post("/api/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const hashedPassword = hashPassword(password);
+        const result = await pool.query(
+            "SELECT id, nom, email, is_premium, is_blocked FROM users WHERE email = $1 AND password = $2",
+            [email, hashedPassword]
+        );
+        if (result.rows.length === 0) {
+            return res.status(401).json({ success: false, message: "Identifiants utilisateur incorrects" });
+        }
+        const user = result.rows[0];
+        if (user.is_blocked) {
+            return res.status(403).json({ success: false, message: "Ce compte a été bloqué par l'administration" });
+        }
+        return res.json({ success: true, user });
+    } catch (err) {
+        console.error("Erreur connexion utilisateur:", err);
+        return res.status(500).json({ success: false, message: "Erreur serveur" });
+    }
 });
 
 /* ============================================================
    LANCEMENT DU SERVEUR
 ============================================================ */
 
-initDatabase()
-    .then(() => {
-        app.listen(PORT, () => {
-            console.log(`🚀 Serveur BMJ SERVICE démarré et prêt sur le port ${PORT}`);
-        });
-    })
-    .catch((err) => {
-        console.error("❌ Erreur critique lors de l'initialisation de la base de données :", err);
-    });s
+app.listen(PORT, () => {
+    console.log(`Serveur BMJ SERVICE démarré et opérationnel sur le port ${PORT}`);
+});
