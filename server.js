@@ -22,7 +22,6 @@ const DATABASE_URL =
 // Identifiants administrateur intégrés en dur directement dans le serveur
 const ADMIN_EMAIL = "admin@bmjservice.com";
 const ADMIN_PASSWORD = "admin123";
-const ADMIN_SECRET = "BMJ_ADMIN_SECRET_CHANGE_ME_2026";
 
 const pool = new Pool({
     connectionString: DATABASE_URL,
@@ -32,17 +31,24 @@ const pool = new Pool({
 });
 
 /* ============================================================
-   MIDDLEWARES
+   MIDDLEWARES (CORS CONFIGURÉ STRICTEMENT POUR ÉVITER LES BLOCAGES)
 ============================================================ */
 
 app.use(cors({
     origin: "*",
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Admin-Token"]
+    allowedHeaders: ["Content-Type", "Authorization", "X-Admin-Token"],
+    credentials: true
 }));
 
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+// Middleware de journalisation pour voir toutes les requêtes entrantes dans les logs Render
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
 
 /* ============================================================
    INITIALISATION AUTOMATIQUE DES TABLES POSTGRESQL
@@ -144,6 +150,21 @@ function adminAuth(req, res, next) {
     req.admin = saved;
     next();
 }
+
+/* ============================================================
+   ROUTE DE TEST DE SANTÉ (PING POUR ÉVITER LE TIMEOUT RENDER)
+============================================================ */
+
+app.get("/", (req, res) => {
+    return res.json({
+        success: true,
+        message: "Bienvenue sur l'API backend de BMJ SERVICE est opérationnelle !"
+    });
+});
+
+app.get("/api/health", (req, res) => {
+    return res.json({ success: true, status: "Server is running" });
+});
 
 /* ============================================================
    ROUTES API : AUTHENTIFICATION ADMIN (Intégrée au serveur)
