@@ -12,6 +12,7 @@ const { Pool } = require("pg");
 
 const app = express();
 
+
 /* ============================================================
    CONFIGURATION
 ============================================================ */
@@ -26,7 +27,9 @@ const ADMIN_EMAIL =
     process.env.ADMIN_EMAIL ||
     "admin@bmjservice.com";
 
-const ADMIN_PASSWORD = "admin123"; // Mot de passe par défaut demandé
+const ADMIN_PASSWORD = 
+    process.env.ADMIN_PASSWORD || 
+    "admin123";
 
 const ADMIN_SECRET =
     process.env.ADMIN_SECRET ||
@@ -38,7 +41,6 @@ const pool = new Pool({
         rejectUnauthorized: false
     }
 });
-
 /* ============================================================
    MIDDLEWARE
 ============================================================ */
