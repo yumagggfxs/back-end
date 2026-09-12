@@ -2005,6 +2005,326 @@ app.patch(
     }
 );
 
+/* ============================================================
+   STATISTIQUES ADMINISTRATEUR
+============================================================ */
+
+app.get(
+    "/api/admin/statistiques",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            /* ====================================================
+               UTILISATEURS
+            ==================================================== */
+
+            const usersResult =
+                await pool.query(`
+                    SELECT
+                        COUNT(*)::INTEGER AS total,
+                        COUNT(*) FILTER (
+                            WHERE is_premium = TRUE
+                        )::INTEGER AS premium,
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(is_premium, FALSE) = FALSE
+                        )::INTEGER AS standard,
+                        COUNT(*) FILTER (
+                            WHERE is_blocked = TRUE
+                        )::INTEGER AS blocked,
+                        COUNT(*) FILTER (
+                            WHERE created_at >= CURRENT_DATE
+                        )::INTEGER AS today
+                    FROM users
+                `);
+
+
+            const usersStats =
+                usersResult.rows[0] || {};
+
+
+            /* ====================================================
+               PAIEMENTS
+            ==================================================== */
+
+            const paymentsResult =
+                await pool.query(`
+                    SELECT
+
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) IN (
+                                'pending',
+                                'en_attente',
+                                'en attente',
+                                'pending_payment'
+                            )
+                        )::INTEGER AS pending,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) IN (
+                                'validated',
+                                'valide',
+                                'validé',
+                                'approved',
+                                'accepte',
+                                'accepté',
+                                'success'
+                            )
+                        )::INTEGER AS validated,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) IN (
+                                'refused',
+                                'refuse',
+                                'refusé',
+                                'rejected',
+                                'annule',
+                                'annulé'
+                            )
+                        )::INTEGER AS refused,
+
+                        COALESCE(
+                            SUM(
+                                CASE
+                                    WHEN LOWER(
+                                        COALESCE(statut, '')
+                                    ) IN (
+                                        'validated',
+                                        'valide',
+                                        'validé',
+                                        'approved',
+                                        'accepte',
+                                        'accepté',
+                                        'success'
+                                    )
+                                    THEN COALESCE(montant, 0)
+                                    ELSE 0
+                                END
+                            ),
+                            0
+                        )::NUMERIC(12,2) AS revenue
+
+                    FROM demandes_paiement
+                `);
+
+
+            const paymentStats =
+                paymentsResult.rows[0] || {};
+
+
+            /* ====================================================
+               MESSAGES
+            ==================================================== */
+
+            const messagesResult =
+                await pool.query(`
+                    SELECT
+                        COUNT(*)::INTEGER AS total
+                    FROM messages
+                `);
+
+
+            const messageStats =
+                messagesResult.rows[0] || {};
+
+
+            /* ====================================================
+               CERTIFICATS
+            ==================================================== */
+
+            const certificatesResult =
+                await pool.query(`
+                    SELECT
+
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE is_authorized = TRUE
+                        )::INTEGER AS authorized
+
+                    FROM certificates
+                `);
+
+
+            const certificateStats =
+                certificatesResult.rows[0] || {};
+
+
+            /* ====================================================
+               CERTIFICATS AUTORISÉS DANS USERS
+               Compatibilité avec l'ancien système
+            ==================================================== */
+
+            const usersCertificatesResult =
+                await pool.query(`
+                    SELECT
+                        COUNT(*) FILTER (
+                            WHERE certificat_autorise = TRUE
+                        )::INTEGER AS authorized
+                    FROM users
+                `);
+
+
+            const usersCertificateStats =
+                usersCertificatesResult.rows[0] || {};
+
+
+            /* ====================================================
+               CALCUL CERTIFICATS AUTORISÉS
+            ==================================================== */
+
+            const certificatesAuthorized =
+                Math.max(
+                    Number(
+                        certificateStats.authorized || 0
+                    ),
+                    Number(
+                        usersCertificateStats.authorized || 0
+                    )
+                );
+
+
+            /* ====================================================
+               RÉSULTAT FINAL
+            ==================================================== */
+
+            const stats = {
+
+                /* Utilisateurs */
+
+                users:
+                    Number(
+                        usersStats.total || 0
+                    ),
+
+                premium:
+                    Number(
+                        usersStats.premium || 0
+                    ),
+
+                standard:
+                    Number(
+                        usersStats.standard || 0
+                    ),
+
+                blocked:
+                    Number(
+                        usersStats.blocked || 0
+                    ),
+
+                today:
+                    Number(
+                        usersStats.today || 0
+                    ),
+
+
+                /* Paiements */
+
+                payments:
+                    Number(
+                        paymentStats.total || 0
+                    ),
+
+                pending:
+                    Number(
+                        paymentStats.pending || 0
+                    ),
+
+                validated:
+                    Number(
+                        paymentStats.validated || 0
+                    ),
+
+                refused:
+                    Number(
+                        paymentStats.refused || 0
+                    ),
+
+                revenue:
+                    Number(
+                        paymentStats.revenue || 0
+                    ),
+
+
+                /* Messages */
+
+                messages:
+                    Number(
+                        messageStats.total || 0
+                    ),
+
+
+                /* Certificats */
+
+                certificates:
+                    Number(
+                        certificateStats.total || 0
+                    ),
+
+                certificates_authorized:
+                    certificatesAuthorized
+
+            };
+
+
+            /* ====================================================
+               JOURNAL ADMIN
+            ==================================================== */
+
+            await logAdminAction(
+                "CONSULTATION_STATISTIQUES",
+                "Consultation des statistiques du tableau de bord"
+            );
+
+
+            /* ====================================================
+               RÉPONSE
+            ==================================================== */
+
+            res.json({
+
+                success: true,
+
+                stats
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "Erreur statistiques admin :",
+                error
+            );
+
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de récupérer les statistiques",
+
+                error:
+                    process.env.NODE_ENV === "production"
+                        ? undefined
+                        : error.message
+
+            });
+
+        }
+
+    }
+);
 
 /* ============================================================
    DÉBLOQUER UTILISATEUR
@@ -3054,368 +3374,7 @@ function normalizeMessagePriority(priority) {
     return "normal";
 }
 
-/* ============================================================
-   STATISTIQUES ADMIN — VUE GÉNÉRALE
-============================================================ */
 
-app.get(
-    "/api/admin/statistiques",
-    adminAuth,
-    async (req, res) => {
-
-        try {
-
-            /* ====================================================
-               UTILISATEURS
-            ==================================================== */
-
-            const usersResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM users
-                `);
-
-
-            const premiumResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM users
-                    WHERE is_premium = TRUE
-                `);
-
-
-            const standardResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM users
-                    WHERE is_premium = FALSE
-                `);
-
-
-            const blockedResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM users
-                    WHERE is_blocked = TRUE
-                `);
-
-
-            /* ====================================================
-               NOUVEAUX UTILISATEURS AUJOURD'HUI
-            ==================================================== */
-
-            const todayResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM users
-                    WHERE created_at >= CURRENT_DATE
-                      AND created_at < CURRENT_DATE + INTERVAL '1 day'
-                `);
-
-
-            /* ====================================================
-               PAIEMENTS
-            ==================================================== */
-
-            const paymentsResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM demandes_paiement
-                `);
-
-
-            const pendingResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM demandes_paiement
-                    WHERE LOWER(COALESCE(statut, 'pending'))
-                    IN (
-                        'pending',
-                        'en_attente',
-                        'en attente'
-                    )
-                `);
-
-
-            const validatedResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM demandes_paiement
-                    WHERE LOWER(COALESCE(statut, ''))
-                    IN (
-                        'validated',
-                        'valide',
-                        'validé',
-                        'approved',
-                        'approuve',
-                        'approuvé',
-                        'paid',
-                        'success'
-                    )
-                `);
-
-
-            const refusedResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM demandes_paiement
-                    WHERE LOWER(COALESCE(statut, ''))
-                    IN (
-                        'refused',
-                        'refuse',
-                        'refusé',
-                        'rejected',
-                        'rejete',
-                        'rejeté',
-                        'declined'
-                    )
-                `);
-
-
-            /* ====================================================
-               REVENUS
-            ==================================================== */
-
-            const revenueResult =
-                await pool.query(`
-                    SELECT
-                        COALESCE(
-                            SUM(
-                                CASE
-                                    WHEN LOWER(COALESCE(statut, ''))
-                                    IN (
-                                        'validated',
-                                        'valide',
-                                        'validé',
-                                        'approved',
-                                        'approuve',
-                                        'approuvé',
-                                        'paid',
-                                        'success'
-                                    )
-                                    THEN montant
-                                    ELSE 0
-                                END
-                            ),
-                            0
-                        )::NUMERIC AS revenue
-                    FROM demandes_paiement
-                `);
-
-
-            /* ====================================================
-               MESSAGES
-            ==================================================== */
-
-            const messagesResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM messages
-                `);
-
-
-            /* ====================================================
-               CERTIFICATS
-            ==================================================== */
-
-            const certificatesResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM certificates
-                `);
-
-
-            const authorizedCertificatesResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM certificates
-                    WHERE is_authorized = TRUE
-                `);
-
-
-            /* ====================================================
-               EXTRA : CERTIFICATS AUTORISÉS DANS USERS
-               
-               On récupère aussi cette valeur pour couvrir
-               les utilisateurs qui ont été autorisés directement
-               depuis la gestion utilisateur.
-            ==================================================== */
-
-            const authorizedUsersResult =
-                await pool.query(`
-                    SELECT COUNT(*)::INTEGER AS total
-                    FROM users
-                    WHERE certificat_autorise = TRUE
-                `);
-
-
-            /* ====================================================
-               VALEURS
-            ==================================================== */
-
-            const users =
-                Number(
-                    usersResult.rows[0]?.total || 0
-                );
-
-
-            const premium =
-                Number(
-                    premiumResult.rows[0]?.total || 0
-                );
-
-
-            const standard =
-                Number(
-                    standardResult.rows[0]?.total || 0
-                );
-
-
-            const blocked =
-                Number(
-                    blockedResult.rows[0]?.total || 0
-                );
-
-
-            const today =
-                Number(
-                    todayResult.rows[0]?.total || 0
-                );
-
-
-            const payments =
-                Number(
-                    paymentsResult.rows[0]?.total || 0
-                );
-
-
-            const pending =
-                Number(
-                    pendingResult.rows[0]?.total || 0
-                );
-
-
-            const validated =
-                Number(
-                    validatedResult.rows[0]?.total || 0
-                );
-
-
-            const refused =
-                Number(
-                    refusedResult.rows[0]?.total || 0
-                );
-
-
-            const messages =
-                Number(
-                    messagesResult.rows[0]?.total || 0
-                );
-
-
-            const certificates =
-                Number(
-                    certificatesResult.rows[0]?.total || 0
-                );
-
-
-            const certificatesAuthorized =
-                Number(
-                    authorizedCertificatesResult.rows[0]?.total || 0
-                );
-
-
-            const authorizedUsers =
-                Number(
-                    authorizedUsersResult.rows[0]?.total || 0
-                );
-
-
-            const revenue =
-                Number(
-                    revenueResult.rows[0]?.revenue || 0
-                );
-
-
-            /* ====================================================
-               RÉPONSE
-            ==================================================== */
-
-            res.json({
-
-                success: true,
-
-                stats: {
-
-                    users,
-
-                    premium,
-
-                    standard,
-
-                    blocked,
-
-                    today,
-
-                    payments,
-
-                    pending,
-
-                    validated,
-
-                    refused,
-
-                    revenue,
-
-                    messages,
-
-                    certificates,
-
-                    /*
-                     * On prend la valeur la plus représentative
-                     * entre la table certificates et users.
-                     */
-
-                    certificates_authorized:
-                        Math.max(
-                            certificatesAuthorized,
-                            authorizedUsers
-                        )
-
-                },
-
-                timestamp:
-                    new Date().toISOString()
-
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                "Erreur statistiques admin :",
-                error
-            );
-
-
-            res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Impossible de récupérer les statistiques.",
-
-                error:
-                    process.env.NODE_ENV === "production"
-                        ? undefined
-                        : error.message
-
-            });
-
-        }
-
-    }
-);
 /* ============================================================
    NETTOYER LE SUJET
 ============================================================ */
