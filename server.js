@@ -2113,7 +2113,556 @@ app.patch(
     }
 );
 
+/* ============================================================
+   STATISTIQUES ADMIN
+============================================================ */
 
+/*
+ * Route principale utilisée par le dashboard :
+ *
+ * GET /api/admin/statistiques
+ *
+ * Retourne toutes les statistiques nécessaires
+ * au panneau d'administration BMJ SERVICE.
+ *
+ * Authentification :
+ * adminAuth
+ *
+ * Aucun token n'est enregistré en base.
+ */
+
+app.get(
+    "/api/admin/statistiques",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            /* ====================================================
+               1. UTILISATEURS
+            ==================================================== */
+
+            const usersResult =
+                await pool.query(`
+                    SELECT
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                is_premium = TRUE
+                                AND (
+                                    premium_until IS NULL
+                                    OR premium_until > CURRENT_TIMESTAMP
+                                )
+                        )::INTEGER AS premium,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                COALESCE(is_premium, FALSE) = FALSE
+                        )::INTEGER AS standard,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                COALESCE(is_blocked, FALSE) = TRUE
+                        )::INTEGER AS blocked,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                created_at >= CURRENT_DATE
+                                AND created_at < CURRENT_DATE + INTERVAL '1 day'
+                        )::INTEGER AS today
+
+                    FROM users
+                `);
+
+
+            const userStats =
+                usersResult.rows[0] || {};
+
+
+            /* ====================================================
+               2. DEMANDES DE PAIEMENT
+            ==================================================== */
+
+            const paymentsResult =
+                await pool.query(`
+                    SELECT
+
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) = 'pending'
+                        )::INTEGER AS pending,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) IN (
+                                'validated',
+                                'valide',
+                                'validé',
+                                'approved',
+                                'approve',
+                                'approuve',
+                                'approuvé',
+                                'paid',
+                                'success'
+                            )
+                        )::INTEGER AS validated,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) IN (
+                                'refused',
+                                'refuse',
+                                'refusé',
+                                'rejected',
+                                'reject',
+                                'cancelled',
+                                'canceled'
+                            )
+                        )::INTEGER AS refused,
+
+                        COALESCE(
+                            SUM(montant) FILTER (
+                                WHERE LOWER(
+                                    COALESCE(statut, '')
+                                ) IN (
+                                    'validated',
+                                    'valide',
+                                    'validé',
+                                    'approved',
+                                    'approve',
+                                    'approuve',
+                                    'approuvé',
+                                    'paid',
+                                    'success'
+                                )
+                            ),
+                            0
+                        )::NUMERIC(12,2) AS revenue
+
+                    FROM demandes_paiement
+                `);
+
+
+            const paymentStats =
+                paymentsResult.rows[0] || {};
+
+
+            /* ====================================================
+               3. MESSAGES
+            ==================================================== */
+
+            const messagesResult =
+                await pool.query(`
+                    SELECT
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                COALESCE(is_read, FALSE) = FALSE
+                        )::INTEGER AS unread,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                COALESCE(is_archived, FALSE) = TRUE
+                        )::INTEGER AS archived
+
+                    FROM messages
+                `);
+
+
+            const messageStats =
+                messagesResult.rows[0] || {};
+
+
+            /* ====================================================
+               4. CERTIFICATS
+            ==================================================== */
+
+            const certificatesResult =
+                await pool.query(`
+                    SELECT
+
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                COALESCE(is_authorized, FALSE) = TRUE
+                        )::INTEGER AS authorized,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                COALESCE(downloaded, FALSE) = TRUE
+                        )::INTEGER AS downloaded
+
+                    FROM certificates
+                `);
+
+
+            const certificateStats =
+                certificatesResult.rows[0] || {};
+
+
+            /* ====================================================
+               5. ACTIVITÉ UTILISATEURS
+            ==================================================== */
+
+            const activitiesResult =
+                await pool.query(`
+                    SELECT
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                created_at >= CURRENT_DATE
+                        )::INTEGER AS today
+
+                    FROM user_activity
+                `);
+
+
+            const activityStats =
+                activitiesResult.rows[0] || {};
+
+
+            /* ====================================================
+               6. ACTIVITÉ ADMIN
+            ==================================================== */
+
+            const adminActivitiesResult =
+                await pool.query(`
+                    SELECT
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                created_at >= CURRENT_DATE
+                        )::INTEGER AS today
+
+                    FROM admin_activity
+                `);
+
+
+            const adminActivityStats =
+                adminActivitiesResult.rows[0] || {};
+
+
+            /* ====================================================
+               7. NOTIFICATIONS
+            ==================================================== */
+
+            const notificationsResult =
+                await pool.query(`
+                    SELECT
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                COALESCE(is_read, FALSE) = FALSE
+                        )::INTEGER AS unread
+
+                    FROM notifications
+                `);
+
+
+            const notificationStats =
+                notificationsResult.rows[0] || {};
+
+
+            /* ====================================================
+               8. PROGRESSION DES COURS
+            ==================================================== */
+
+            const progressResult =
+                await pool.query(`
+                    SELECT
+
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) = 'termine'
+                            OR LOWER(
+                                COALESCE(statut, '')
+                            ) = 'terminé'
+                            OR LOWER(
+                                COALESCE(statut, '')
+                            ) = 'completed'
+                        )::INTEGER AS completed,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) = 'en_cours'
+                            OR LOWER(
+                                COALESCE(statut, '')
+                            ) = 'en cours'
+                        )::INTEGER AS in_progress
+
+                    FROM user_progress
+                `);
+
+
+            const progressStats =
+                progressResult.rows[0] || {};
+
+
+            /* ====================================================
+               9. STATISTIQUES SUPPLÉMENTAIRES UTILISATEURS
+            ==================================================== */
+
+            const loginResult =
+                await pool.query(`
+                    SELECT
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                last_login IS NOT NULL
+                        )::INTEGER AS logged_users,
+
+                        COUNT(*) FILTER (
+                            WHERE
+                                last_login >= CURRENT_DATE
+                        )::INTEGER AS active_today
+
+                    FROM users
+                `);
+
+
+            const loginStats =
+                loginResult.rows[0] || {};
+
+
+            /* ====================================================
+               10. CONVERSION DES VALEURS
+            ==================================================== */
+
+            const users =
+                Number(userStats.total || 0);
+
+            const premium =
+                Number(userStats.premium || 0);
+
+            const standard =
+                Number(userStats.standard || 0);
+
+            const blocked =
+                Number(userStats.blocked || 0);
+
+            const today =
+                Number(userStats.today || 0);
+
+
+            const payments =
+                Number(paymentStats.total || 0);
+
+            const pending =
+                Number(paymentStats.pending || 0);
+
+            const validated =
+                Number(paymentStats.validated || 0);
+
+            const refused =
+                Number(paymentStats.refused || 0);
+
+            const revenue =
+                Number(paymentStats.revenue || 0);
+
+
+            const messages =
+                Number(messageStats.total || 0);
+
+
+            const certificates =
+                Number(certificateStats.total || 0);
+
+            const certificatesAuthorized =
+                Number(
+                    certificateStats.authorized || 0
+                );
+
+
+            /* ====================================================
+               11. RÉPONSE PRINCIPALE
+            ==================================================== */
+
+            return res.json({
+
+                success: true,
+
+                stats: {
+
+                    /* ------------------------------------------
+                       UTILISATEURS
+                    ------------------------------------------ */
+
+                    users,
+
+                    premium,
+
+                    standard,
+
+                    blocked,
+
+                    today,
+
+
+                    /* ------------------------------------------
+                       PAIEMENTS
+                    ------------------------------------------ */
+
+                    payments,
+
+                    pending,
+
+                    validated,
+
+                    refused,
+
+                    revenue,
+
+
+                    /* ------------------------------------------
+                       MESSAGES
+                    ------------------------------------------ */
+
+                    messages,
+
+
+                    /* ------------------------------------------
+                       CERTIFICATS
+                    ------------------------------------------ */
+
+                    certificates,
+
+                    certificates_authorized:
+                        certificatesAuthorized,
+
+
+                    /* ------------------------------------------
+                       INFORMATIONS SUPPLÉMENTAIRES
+                    ------------------------------------------ */
+
+                    unread_messages:
+                        Number(
+                            messageStats.unread || 0
+                        ),
+
+                    archived_messages:
+                        Number(
+                            messageStats.archived || 0
+                        ),
+
+                    downloaded_certificates:
+                        Number(
+                            certificateStats.downloaded || 0
+                        ),
+
+                    user_activities:
+                        Number(
+                            activityStats.total || 0
+                        ),
+
+                    user_activities_today:
+                        Number(
+                            activityStats.today || 0
+                        ),
+
+                    admin_activities:
+                        Number(
+                            adminActivityStats.total || 0
+                        ),
+
+                    admin_activities_today:
+                        Number(
+                            adminActivityStats.today || 0
+                        ),
+
+                    notifications:
+                        Number(
+                            notificationStats.total || 0
+                        ),
+
+                    unread_notifications:
+                        Number(
+                            notificationStats.unread || 0
+                        ),
+
+                    progress_total:
+                        Number(
+                            progressStats.total || 0
+                        ),
+
+                    progress_completed:
+                        Number(
+                            progressStats.completed || 0
+                        ),
+
+                    progress_in_progress:
+                        Number(
+                            progressStats.in_progress || 0
+                        ),
+
+                    logged_users:
+                        Number(
+                            loginStats.logged_users || 0
+                        ),
+
+                    active_today:
+                        Number(
+                            loginStats.active_today || 0
+                        )
+
+                },
+
+                generated_at:
+                    new Date().toISOString()
+
+            });
+
+        } catch (error) {
+
+            console.error(
+                "========================================"
+            );
+
+            console.error(
+                "ERREUR STATISTIQUES ADMIN"
+            );
+
+            console.error(
+                error
+            );
+
+            console.error(
+                "========================================"
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de récupérer les statistiques administrateur.",
+
+                error:
+                    process.env.NODE_ENV === "production"
+                        ? undefined
+                        : error.message
+
+            });
+
+        }
+
+    }
+);
 /* ============================================================
    ACTIVER PREMIUM
 ============================================================ */
