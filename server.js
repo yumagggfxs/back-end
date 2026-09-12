@@ -3024,6 +3024,66 @@ app.get(
     }
 );
 
+/* ============================================================
+   SYSTÈME COMPLET DE MESSAGES ADMIN
+   BMJ SERVICE
+============================================================ */
+
+
+/* ============================================================
+   OUTILS MESSAGES
+============================================================ */
+
+function normalizeMessagePriority(priority) {
+
+    const allowedPriorities = [
+        "normal",
+        "important",
+        "urgent"
+    ];
+
+    const value =
+        String(priority || "")
+            .trim()
+            .toLowerCase();
+
+    if (allowedPriorities.includes(value)) {
+        return value;
+    }
+
+    return "normal";
+}
+
+
+/* ============================================================
+   NETTOYER LE SUJET
+============================================================ */
+
+function normalizeMessageSubject(subject) {
+
+    const value =
+        String(subject || "")
+            .trim();
+
+    if (!value) {
+        return "Message BMJ SERVICE";
+    }
+
+    return value.substring(0, 200);
+}
+
+
+/* ============================================================
+   NETTOYER LE CONTENU
+============================================================ */
+
+function normalizeMessageContent(message) {
+
+    return String(message || "")
+        .trim();
+
+}
+
 
 /* ============================================================
    ENVOYER MESSAGE À UN UTILISATEUR
@@ -3034,6 +3094,9 @@ app.post(
     adminAuth,
     async (req, res) => {
 
+        const client =
+            await pool.connect();
+
         try {
 
             const {
@@ -3041,16 +3104,38 @@ app.post(
                 subject,
                 message,
                 priority
-            } = req.body;
+            } = req.body || {};
 
 
             const userId =
                 Number(user_id);
 
 
+            const cleanSubject =
+                normalizeMessageSubject(
+                    subject
+                );
+
+
+            const cleanMessage =
+                normalizeMessageContent(
+                    message
+                );
+
+
+            const cleanPriority =
+                normalizeMessagePriority(
+                    priority
+                );
+
+
+            /* ----------------------------------------------------
+               VALIDATION
+            ---------------------------------------------------- */
+
             if (
-                !userId ||
-                !message
+                !Number.isInteger(userId) ||
+                userId <= 0
             ) {
 
                 return res.status(400).json({
@@ -3058,15 +3143,103 @@ app.post(
                     success: false,
 
                     message:
-                        "Utilisateur et message requis"
+                        "Utilisateur invalide"
 
                 });
 
             }
 
 
-            const result =
-                await pool.query(
+            if (!cleanMessage) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le message est requis"
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------------
+               VÉRIFIER L'UTILISATEUR
+            ---------------------------------------------------- */
+
+            const userResult =
+                await client.query(
+                    `
+                    SELECT
+                        id,
+                        nom,
+                        email,
+                        is_premium,
+                        is_blocked
+                    FROM users
+                    WHERE id = $1
+                    LIMIT 1
+                    `,
+                    [userId]
+                );
+
+
+            if (
+                userResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable"
+
+                });
+
+            }
+
+
+            const user =
+                userResult.rows[0];
+
+
+            /* ----------------------------------------------------
+               UTILISATEUR BLOQUÉ
+            ---------------------------------------------------- */
+
+            if (
+                user.is_blocked === true
+            ) {
+
+                return res.status(403).json({
+
+                    success: false,
+
+                    message:
+                        "Impossible d'envoyer un message à un utilisateur bloqué"
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------------
+               TRANSACTION
+            ---------------------------------------------------- */
+
+            await client.query(
+                "BEGIN"
+            );
+
+
+            /* ----------------------------------------------------
+               ENREGISTRER MESSAGE
+            ---------------------------------------------------- */
+
+            const messageResult =
+                await client.query(
                     `
                     INSERT INTO messages
                     (
@@ -3094,16 +3267,18 @@ app.post(
                     `,
                     [
                         userId,
-                        subject ||
-                            "Message BMJ SERVICE",
-                        message,
-                        priority ||
-                            "normal"
+                        cleanSubject,
+                        cleanMessage,
+                        cleanPriority
                     ]
                 );
 
 
-            await pool.query(
+            /* ----------------------------------------------------
+               CRÉER NOTIFICATION
+            ---------------------------------------------------- */
+
+            await client.query(
                 `
                 INSERT INTO notifications
                 (
@@ -3113,52 +3288,106 @@ app.post(
                     type
                 )
                 VALUES
-                ($1, $2, $3, $4)
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4
+                )
                 `,
                 [
                     userId,
-                    subject ||
-                        "Nouveau message",
-                    message,
-                    priority ||
-                        "info"
+                    cleanSubject,
+                    cleanMessage,
+                    cleanPriority
                 ]
             );
 
 
-            await logAdminAction(
-                "MESSAGE_UTILISATEUR",
-                `Message envoyé à l'utilisateur ${userId}`
+            /* ----------------------------------------------------
+               VALIDER
+            ---------------------------------------------------- */
+
+            await client.query(
+                "COMMIT"
             );
 
 
-            res.json({
+            /* ----------------------------------------------------
+               JOURNAL ADMIN
+            ---------------------------------------------------- */
+
+            try {
+
+                await logAdminAction(
+                    "MESSAGE_UTILISATEUR",
+                    `Message envoyé à l'utilisateur ${userId}`
+                );
+
+            } catch (logError) {
+
+                console.error(
+                    "Erreur journal admin :",
+                    logError
+                );
+
+            }
+
+
+            /* ----------------------------------------------------
+               RÉPONSE
+            ---------------------------------------------------- */
+
+            return res.status(201).json({
 
                 success: true,
 
                 messageData:
-                    result.rows[0],
+                    messageResult.rows[0],
 
                 message:
                     "Message envoyé avec succès"
 
             });
 
+
         } catch (error) {
 
+            try {
+
+                await client.query(
+                    "ROLLBACK"
+                );
+
+            } catch (rollbackError) {
+
+                console.error(
+                    "Erreur rollback :",
+                    rollbackError
+                );
+
+            }
+
+
             console.error(
-                "Erreur message :",
+                "Erreur message utilisateur :",
                 error
             );
 
-            res.status(500).json({
+
+            return res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur envoi message"
+                    "Erreur lors de l'envoi du message"
 
             });
+
+
+        } finally {
+
+            client.release();
 
         }
 
@@ -3175,16 +3404,41 @@ app.post(
     adminAuth,
     async (req, res) => {
 
+        const client =
+            await pool.connect();
+
         try {
 
             const {
                 subject,
                 message,
                 priority
-            } = req.body;
+            } = req.body || {};
 
 
-            if (!message) {
+            const cleanSubject =
+                normalizeMessageSubject(
+                    subject
+                );
+
+
+            const cleanMessage =
+                normalizeMessageContent(
+                    message
+                );
+
+
+            const cleanPriority =
+                normalizeMessagePriority(
+                    priority
+                );
+
+
+            /* ----------------------------------------------------
+               VALIDATION
+            ---------------------------------------------------- */
+
+            if (!cleanMessage) {
 
                 return res.status(400).json({
 
@@ -3198,29 +3452,68 @@ app.post(
             }
 
 
+            /* ----------------------------------------------------
+               RÉCUPÉRER UTILISATEURS
+            ---------------------------------------------------- */
+
             const users =
-                await pool.query(
+                await client.query(
                     `
-                    SELECT id
+                    SELECT
+                        id
                     FROM users
-                    WHERE is_blocked = FALSE
+                    WHERE
+                        COALESCE(is_blocked, FALSE) = FALSE
+                    ORDER BY id ASC
                     `
                 );
 
 
+            if (
+                users.rows.length === 0
+            ) {
+
+                return res.json({
+
+                    success: true,
+
+                    count: 0,
+
+                    message:
+                        "Aucun utilisateur disponible"
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------------
+               TRANSACTION
+            ---------------------------------------------------- */
+
+            await client.query(
+                "BEGIN"
+            );
+
+
             let count = 0;
 
+
+            /* ----------------------------------------------------
+               ENVOYER À CHAQUE UTILISATEUR
+            ---------------------------------------------------- */
 
             for (
                 const user
                 of users.rows
             ) {
 
-                await pool.query(
+                await client.query(
                     `
                     INSERT INTO messages
                     (
                         sender_type,
+                        sender_id,
                         recipient_type,
                         recipient_user_id,
                         audience,
@@ -3231,6 +3524,7 @@ app.post(
                     VALUES
                     (
                         'admin',
+                        NULL,
                         'user',
                         $1,
                         'all',
@@ -3241,16 +3535,18 @@ app.post(
                     `,
                     [
                         user.id,
-                        subject ||
-                            "Message BMJ SERVICE",
-                        message,
-                        priority ||
-                            "normal"
+                        cleanSubject,
+                        cleanMessage,
+                        cleanPriority
                     ]
                 );
 
 
-                await pool.query(
+                /* ------------------------------------------------
+                   NOTIFICATION
+                ------------------------------------------------ */
+
+                await client.query(
                     `
                     INSERT INTO notifications
                     (
@@ -3260,15 +3556,18 @@ app.post(
                         type
                     )
                     VALUES
-                    ($1, $2, $3, $4)
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        $4
+                    )
                     `,
                     [
                         user.id,
-                        subject ||
-                            "Nouveau message BMJ SERVICE",
-                        message,
-                        priority ||
-                            "info"
+                        cleanSubject,
+                        cleanMessage,
+                        cleanPriority
                     ]
                 );
 
@@ -3278,13 +3577,37 @@ app.post(
             }
 
 
-            await logAdminAction(
-                "MESSAGE_GLOBAL",
-                `Message envoyé à ${count} utilisateurs`
+            /* ----------------------------------------------------
+               COMMIT
+            ---------------------------------------------------- */
+
+            await client.query(
+                "COMMIT"
             );
 
 
-            res.json({
+            /* ----------------------------------------------------
+               JOURNAL
+            ---------------------------------------------------- */
+
+            try {
+
+                await logAdminAction(
+                    "MESSAGE_GLOBAL",
+                    `Message envoyé à ${count} utilisateurs`
+                );
+
+            } catch (logError) {
+
+                console.error(
+                    "Erreur journal admin :",
+                    logError
+                );
+
+            }
+
+
+            return res.status(201).json({
 
                 success: true,
 
@@ -3295,18 +3618,44 @@ app.post(
 
             });
 
+
         } catch (error) {
 
-            console.error(error);
+            try {
 
-            res.status(500).json({
+                await client.query(
+                    "ROLLBACK"
+                );
+
+            } catch (rollbackError) {
+
+                console.error(
+                    "Erreur rollback :",
+                    rollbackError
+                );
+
+            }
+
+
+            console.error(
+                "Erreur message global :",
+                error
+            );
+
+
+            return res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur envoi global"
+                    "Erreur lors de l'envoi global"
 
             });
+
+
+        } finally {
+
+            client.release();
 
         }
 
@@ -3323,16 +3672,42 @@ app.post(
     adminAuth,
     async (req, res) => {
 
+        const client =
+            await pool.connect();
+
         try {
 
             const {
                 subject,
                 message,
                 priority
-            } = req.body;
+            } = req.body || {};
 
 
-            if (!message) {
+            const cleanSubject =
+                normalizeMessageSubject(
+                    subject ||
+                    "Message Premium"
+                );
+
+
+            const cleanMessage =
+                normalizeMessageContent(
+                    message
+                );
+
+
+            const cleanPriority =
+                normalizeMessagePriority(
+                    priority
+                );
+
+
+            /* ----------------------------------------------------
+               VALIDATION
+            ---------------------------------------------------- */
+
+            if (!cleanMessage) {
 
                 return res.status(400).json({
 
@@ -3346,31 +3721,65 @@ app.post(
             }
 
 
+            /* ----------------------------------------------------
+               UTILISATEURS PREMIUM
+            ---------------------------------------------------- */
+
             const users =
-                await pool.query(
+                await client.query(
                     `
-                    SELECT id
+                    SELECT
+                        id
                     FROM users
                     WHERE
-                        is_premium = TRUE
-                        AND is_blocked = FALSE
+                        COALESCE(is_premium, FALSE) = TRUE
+                        AND COALESCE(is_blocked, FALSE) = FALSE
+                    ORDER BY id ASC
                     `
                 );
 
 
+            if (
+                users.rows.length === 0
+            ) {
+
+                return res.json({
+
+                    success: true,
+
+                    count: 0,
+
+                    message:
+                        "Aucun utilisateur Premium disponible"
+
+                });
+
+            }
+
+
+            await client.query(
+                "BEGIN"
+            );
+
+
             let count = 0;
 
+
+            /* ----------------------------------------------------
+               ENVOYER
+            ---------------------------------------------------- */
 
             for (
                 const user
                 of users.rows
             ) {
 
-                await pool.query(
+                await client.query(
                     `
                     INSERT INTO messages
                     (
                         sender_type,
+                        sender_id,
                         recipient_type,
                         recipient_user_id,
                         audience,
@@ -3381,6 +3790,7 @@ app.post(
                     VALUES
                     (
                         'admin',
+                        NULL,
                         'user',
                         $1,
                         'premium',
@@ -3391,26 +3801,75 @@ app.post(
                     `,
                     [
                         user.id,
-                        subject ||
-                            "Message Premium",
-                        message,
-                        priority ||
-                            "normal"
+                        cleanSubject,
+                        cleanMessage,
+                        cleanPriority
                     ]
                 );
+
+
+                /* ------------------------------------------------
+                   NOTIFICATION PREMIUM
+                ------------------------------------------------ */
+
+                await client.query(
+                    `
+                    INSERT INTO notifications
+                    (
+                        user_id,
+                        title,
+                        message,
+                        type
+                    )
+                    VALUES
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        $4
+                    )
+                    `,
+                    [
+                        user.id,
+                        cleanSubject,
+                        cleanMessage,
+                        cleanPriority
+                    ]
+                );
+
 
                 count++;
 
             }
 
 
-            await logAdminAction(
-                "MESSAGE_PREMIUM",
-                `${count} utilisateurs Premium`
+            await client.query(
+                "COMMIT"
             );
 
 
-            res.json({
+            /* ----------------------------------------------------
+               JOURNAL
+            ---------------------------------------------------- */
+
+            try {
+
+                await logAdminAction(
+                    "MESSAGE_PREMIUM",
+                    `${count} utilisateurs Premium`
+                );
+
+            } catch (logError) {
+
+                console.error(
+                    "Erreur journal admin :",
+                    logError
+                );
+
+            }
+
+
+            return res.status(201).json({
 
                 success: true,
 
@@ -3421,18 +3880,44 @@ app.post(
 
             });
 
+
         } catch (error) {
 
-            console.error(error);
+            try {
 
-            res.status(500).json({
+                await client.query(
+                    "ROLLBACK"
+                );
+
+            } catch (rollbackError) {
+
+                console.error(
+                    "Erreur rollback :",
+                    rollbackError
+                );
+
+            }
+
+
+            console.error(
+                "Erreur message Premium :",
+                error
+            );
+
+
+            return res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur message Premium"
+                    "Erreur lors de l'envoi du message Premium"
 
             });
+
+
+        } finally {
+
+            client.release();
 
         }
 
@@ -3449,16 +3934,41 @@ app.post(
     adminAuth,
     async (req, res) => {
 
+        const client =
+            await pool.connect();
+
         try {
 
             const {
                 subject,
                 message,
                 priority
-            } = req.body;
+            } = req.body || {};
 
 
-            if (!message) {
+            const cleanSubject =
+                normalizeMessageSubject(
+                    subject
+                );
+
+
+            const cleanMessage =
+                normalizeMessageContent(
+                    message
+                );
+
+
+            const cleanPriority =
+                normalizeMessagePriority(
+                    priority
+                );
+
+
+            /* ----------------------------------------------------
+               VALIDATION
+            ---------------------------------------------------- */
+
+            if (!cleanMessage) {
 
                 return res.status(400).json({
 
@@ -3472,31 +3982,65 @@ app.post(
             }
 
 
+            /* ----------------------------------------------------
+               UTILISATEURS STANDARD
+            ---------------------------------------------------- */
+
             const users =
-                await pool.query(
+                await client.query(
                     `
-                    SELECT id
+                    SELECT
+                        id
                     FROM users
                     WHERE
-                        is_premium = FALSE
-                        AND is_blocked = FALSE
+                        COALESCE(is_premium, FALSE) = FALSE
+                        AND COALESCE(is_blocked, FALSE) = FALSE
+                    ORDER BY id ASC
                     `
                 );
 
 
+            if (
+                users.rows.length === 0
+            ) {
+
+                return res.json({
+
+                    success: true,
+
+                    count: 0,
+
+                    message:
+                        "Aucun utilisateur Standard disponible"
+
+                });
+
+            }
+
+
+            await client.query(
+                "BEGIN"
+            );
+
+
             let count = 0;
 
+
+            /* ----------------------------------------------------
+               ENVOYER
+            ---------------------------------------------------- */
 
             for (
                 const user
                 of users.rows
             ) {
 
-                await pool.query(
+                await client.query(
                     `
                     INSERT INTO messages
                     (
                         sender_type,
+                        sender_id,
                         recipient_type,
                         recipient_user_id,
                         audience,
@@ -3507,6 +4051,7 @@ app.post(
                     VALUES
                     (
                         'admin',
+                        NULL,
                         'user',
                         $1,
                         'standard',
@@ -3517,26 +4062,75 @@ app.post(
                     `,
                     [
                         user.id,
-                        subject ||
-                            "Message BMJ SERVICE",
-                        message,
-                        priority ||
-                            "normal"
+                        cleanSubject,
+                        cleanMessage,
+                        cleanPriority
                     ]
                 );
+
+
+                /* ------------------------------------------------
+                   NOTIFICATION
+                ------------------------------------------------ */
+
+                await client.query(
+                    `
+                    INSERT INTO notifications
+                    (
+                        user_id,
+                        title,
+                        message,
+                        type
+                    )
+                    VALUES
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        $4
+                    )
+                    `,
+                    [
+                        user.id,
+                        cleanSubject,
+                        cleanMessage,
+                        cleanPriority
+                    ]
+                );
+
 
                 count++;
 
             }
 
 
-            await logAdminAction(
-                "MESSAGE_STANDARD",
-                `${count} utilisateurs Standard`
+            await client.query(
+                "COMMIT"
             );
 
 
-            res.json({
+            /* ----------------------------------------------------
+               JOURNAL
+            ---------------------------------------------------- */
+
+            try {
+
+                await logAdminAction(
+                    "MESSAGE_STANDARD",
+                    `${count} utilisateurs Standard`
+                );
+
+            } catch (logError) {
+
+                console.error(
+                    "Erreur journal admin :",
+                    logError
+                );
+
+            }
+
+
+            return res.status(201).json({
 
                 success: true,
 
@@ -3547,18 +4141,44 @@ app.post(
 
             });
 
+
         } catch (error) {
 
-            console.error(error);
+            try {
 
-            res.status(500).json({
+                await client.query(
+                    "ROLLBACK"
+                );
+
+            } catch (rollbackError) {
+
+                console.error(
+                    "Erreur rollback :",
+                    rollbackError
+                );
+
+            }
+
+
+            console.error(
+                "Erreur message Standard :",
+                error
+            );
+
+
+            return res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur message Standard"
+                    "Erreur lors de l'envoi du message Standard"
 
             });
+
+
+        } finally {
+
+            client.release();
 
         }
 
@@ -3567,7 +4187,8 @@ app.post(
 
 
 /* ============================================================
-   MESSAGES D'UN UTILISATEUR - ADMIN
+   RÉCUPÉRER LES MESSAGES D'UN UTILISATEUR
+   ADMIN
 ============================================================ */
 
 app.get(
@@ -3583,6 +4204,68 @@ app.get(
                 );
 
 
+            /* ----------------------------------------------------
+               VALIDATION
+            ---------------------------------------------------- */
+
+            if (
+                !Number.isInteger(userId) ||
+                userId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant utilisateur invalide"
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------------
+               VÉRIFIER UTILISATEUR
+            ---------------------------------------------------- */
+
+            const userResult =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        nom,
+                        email,
+                        is_premium,
+                        is_blocked
+                    FROM users
+                    WHERE id = $1
+                    LIMIT 1
+                    `,
+                    [userId]
+                );
+
+
+            if (
+                userResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable"
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------------
+               RÉCUPÉRER LA CONVERSATION
+            ---------------------------------------------------- */
+
             const result =
                 await pool.query(
                     `
@@ -3590,32 +4273,54 @@ app.get(
                     FROM messages
                     WHERE
                         recipient_user_id = $1
-                        OR sender_id = $1
-                    ORDER BY id DESC
+                        OR (
+                            sender_type = 'user'
+                            AND sender_id = $1
+                        )
+                    ORDER BY
+                        id ASC
                     `,
                     [userId]
                 );
 
 
-            res.json({
+            /* ----------------------------------------------------
+               RÉPONSE
+            ---------------------------------------------------- */
+
+            return res.json({
 
                 success: true,
+
+                user_id:
+                    userId,
+
+                user:
+                    userResult.rows[0],
+
+                count:
+                    result.rows.length,
 
                 messages:
                     result.rows
 
             });
 
+
         } catch (error) {
 
-            console.error(error);
+            console.error(
+                "Erreur récupération messages :",
+                error
+            );
 
-            res.status(500).json({
+
+            return res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur messages"
+                    "Erreur lors de la récupération des messages"
 
             });
 
@@ -3634,6 +4339,9 @@ app.post(
     adminAuth,
     async (req, res) => {
 
+        const client =
+            await pool.connect();
+
         try {
 
             const messageId =
@@ -3641,13 +4349,39 @@ app.post(
                     req.params.id
                 );
 
-            const message =
-                clean(
-                    req.body.message
+
+            const cleanMessage =
+                normalizeMessageContent(
+                    req.body?.message
                 );
 
 
-            if (!message) {
+            /* ----------------------------------------------------
+               VALIDATION ID
+            ---------------------------------------------------- */
+
+            if (
+                !Number.isInteger(messageId) ||
+                messageId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant du message invalide"
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------------
+               VALIDATION MESSAGE
+            ---------------------------------------------------- */
+
+            if (!cleanMessage) {
 
                 return res.status(400).json({
 
@@ -3661,19 +4395,24 @@ app.post(
             }
 
 
-            const original =
-                await pool.query(
+            /* ----------------------------------------------------
+               RÉCUPÉRER MESSAGE ORIGINAL
+            ---------------------------------------------------- */
+
+            const originalResult =
+                await client.query(
                     `
                     SELECT *
                     FROM messages
                     WHERE id = $1
+                    LIMIT 1
                     `,
                     [messageId]
                 );
 
 
             if (
-                original.rows.length === 0
+                originalResult.rows.length === 0
             ) {
 
                 return res.status(404).json({
@@ -3689,34 +4428,175 @@ app.post(
 
 
             const originalMessage =
-                original.rows[0];
+                originalResult.rows[0];
 
 
-            const userId =
-                originalMessage
-                    .recipient_user_id;
+                        /* ----------------------------------------------------
+               TROUVER L'UTILISATEUR
+            ---------------------------------------------------- */
+
+            let userId = null;
 
 
-            if (!userId) {
+            /*
+             * CAS 1 :
+             * Le message original vient de l'utilisateur
+             *
+             * Dans ce cas :
+             * sender_id = ID de l'utilisateur
+             */
+
+            if (
+                originalMessage.sender_type === "user" &&
+                originalMessage.sender_id
+            ) {
+
+                userId =
+                    Number(
+                        originalMessage.sender_id
+                    );
+
+            }
+
+
+            /*
+             * CAS 2 :
+             * Le message original vient de l'administration
+             *
+             * Dans ce cas :
+             * recipient_user_id = ID de l'utilisateur
+             */
+
+            if (
+                !userId &&
+                originalMessage.recipient_user_id
+            ) {
+
+                userId =
+                    Number(
+                        originalMessage.recipient_user_id
+                    );
+
+            }
+
+
+            /* ----------------------------------------------------
+               VÉRIFICATION DE L'UTILISATEUR
+            ---------------------------------------------------- */
+
+            if (
+                !Number.isInteger(userId) ||
+                userId <= 0
+            ) {
 
                 return res.status(400).json({
 
                     success: false,
 
                     message:
-                        "Utilisateur destinataire introuvable"
+                        "Impossible de déterminer l'utilisateur de cette conversation"
 
                 });
 
             }
 
 
-            const result =
-                await pool.query(
+            /* ----------------------------------------------------
+               RÉCUPÉRER L'UTILISATEUR
+            ---------------------------------------------------- */
+
+            const userResult =
+                await client.query(
+                    `
+                    SELECT
+                        id,
+                        nom,
+                        email,
+                        is_premium,
+                        is_blocked
+                    FROM users
+                    WHERE id = $1
+                    LIMIT 1
+                    `,
+                    [userId]
+                );
+
+
+            /* ----------------------------------------------------
+               UTILISATEUR INTROUVABLE
+            ---------------------------------------------------- */
+
+            if (
+                userResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable"
+
+                });
+
+            }
+
+
+            const user =
+                userResult.rows[0];
+
+
+            /* ----------------------------------------------------
+               VÉRIFIER SI L'UTILISATEUR EST BLOQUÉ
+            ---------------------------------------------------- */
+
+            if (
+                user.is_blocked === true
+            ) {
+
+                return res.status(403).json({
+
+                    success: false,
+
+                    message:
+                        "Impossible de répondre à un utilisateur bloqué"
+
+                });
+
+            }
+
+
+            /* ----------------------------------------------------
+               COMMENCER LA TRANSACTION
+            ---------------------------------------------------- */
+
+            await client.query(
+                "BEGIN"
+            );
+
+
+            /* ----------------------------------------------------
+               SUJET DE LA RÉPONSE
+            ---------------------------------------------------- */
+
+            const replySubject =
+                normalizeMessageSubject(
+                    originalMessage.subject ||
+                    "Réponse BMJ SERVICE"
+                );
+
+
+            /* ----------------------------------------------------
+               ENREGISTRER LA RÉPONSE
+            ---------------------------------------------------- */
+
+            const replyResult =
+                await client.query(
                     `
                     INSERT INTO messages
                     (
                         sender_type,
+                        sender_id,
                         recipient_type,
                         recipient_user_id,
                         audience,
@@ -3728,6 +4608,7 @@ app.post(
                     VALUES
                     (
                         'admin',
+                        NULL,
                         'user',
                         $1,
                         'individual',
@@ -3740,40 +4621,137 @@ app.post(
                     `,
                     [
                         userId,
-                        "Réponse BMJ SERVICE",
-                        message,
+                        replySubject,
+                        cleanMessage,
                         messageId
                     ]
                 );
 
 
-            await logAdminAction(
-                "REPONSE_MESSAGE",
-                `Message ${messageId}`
+            /* ----------------------------------------------------
+               CRÉER LA NOTIFICATION
+            ---------------------------------------------------- */
+
+            await client.query(
+                `
+                INSERT INTO notifications
+                (
+                    user_id,
+                    title,
+                    message,
+                    type
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4
+                )
+                `,
+                [
+                    userId,
+                    replySubject,
+                    cleanMessage,
+                    "normal"
+                ]
             );
 
 
-            res.json({
+            /* ----------------------------------------------------
+               VALIDER LA TRANSACTION
+            ---------------------------------------------------- */
+
+            await client.query(
+                "COMMIT"
+            );
+
+
+            /* ----------------------------------------------------
+               JOURNAL ADMIN
+            ---------------------------------------------------- */
+
+            try {
+
+                await logAdminAction(
+                    "REPONSE_MESSAGE",
+                    `Réponse au message ${messageId} envoyée à l'utilisateur ${userId}`
+                );
+
+            } catch (logError) {
+
+                console.error(
+                    "Erreur journal admin :",
+                    logError
+                );
+
+            }
+
+
+            /* ----------------------------------------------------
+               RÉPONSE AU FRONTEND
+            ---------------------------------------------------- */
+
+            return res.status(201).json({
 
                 success: true,
 
                 messageData:
-                    result.rows[0]
+                    replyResult.rows[0],
+
+                message:
+                    "Réponse envoyée avec succès"
 
             });
 
+
         } catch (error) {
 
-            console.error(error);
 
-            res.status(500).json({
+            /* ----------------------------------------------------
+               ANNULER LA TRANSACTION EN CAS D'ERREUR
+            ---------------------------------------------------- */
+
+            try {
+
+                await client.query(
+                    "ROLLBACK"
+                );
+
+            } catch (rollbackError) {
+
+                console.error(
+                    "Erreur rollback :",
+                    rollbackError
+                );
+
+            }
+
+
+            console.error(
+                "Erreur réponse message :",
+                error
+            );
+
+
+            return res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur réponse message"
+                    "Erreur lors de l'envoi de la réponse"
 
             });
+
+
+        } finally {
+
+
+            /* ----------------------------------------------------
+               LIBÉRER LA CONNEXION
+            ---------------------------------------------------- */
+
+            client.release();
 
         }
 
@@ -3781,6 +4759,9 @@ app.post(
 );
 
 
+/* ============================================================
+   FIN — SYSTÈME DE MESSAGES ADMIN
+============================================================ */
 /* ============================================================
    NOTIFICATIONS UTILISATEUR - ADMIN
 ============================================================ */
