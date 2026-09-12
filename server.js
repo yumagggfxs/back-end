@@ -43,7 +43,7 @@ const PORT =
 
 const DATABASE_URL =
     process.env.DATABASE_URL ||
-    "";
+    "postgresql://name_bmj_db_user:TjgoLRbYV0LizRgBFD1nepGqSqErgBgD@dpg-dagn0e15efls73b8rjh0-a/name_bmj_db";
 
 
 /* ============================================================
