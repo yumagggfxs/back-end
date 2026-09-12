@@ -43,7 +43,7 @@ const PORT =
 
 const DATABASE_URL =
     process.env.DATABASE_URL ||
-    "postgresql://name_bmj_db_user:TjgoLRbYV0LizRgBFD1nepGqSqErgBgD@dpg-dagn0e15efls73b8rjh0-a/name_bmj_db";
+    "";
 
 
 /* ============================================================
@@ -3054,7 +3054,368 @@ function normalizeMessagePriority(priority) {
     return "normal";
 }
 
+/* ============================================================
+   STATISTIQUES ADMIN — VUE GÉNÉRALE
+============================================================ */
 
+app.get(
+    "/api/admin/statistiques",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            /* ====================================================
+               UTILISATEURS
+            ==================================================== */
+
+            const usersResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM users
+                `);
+
+
+            const premiumResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM users
+                    WHERE is_premium = TRUE
+                `);
+
+
+            const standardResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM users
+                    WHERE is_premium = FALSE
+                `);
+
+
+            const blockedResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM users
+                    WHERE is_blocked = TRUE
+                `);
+
+
+            /* ====================================================
+               NOUVEAUX UTILISATEURS AUJOURD'HUI
+            ==================================================== */
+
+            const todayResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM users
+                    WHERE created_at >= CURRENT_DATE
+                      AND created_at < CURRENT_DATE + INTERVAL '1 day'
+                `);
+
+
+            /* ====================================================
+               PAIEMENTS
+            ==================================================== */
+
+            const paymentsResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM demandes_paiement
+                `);
+
+
+            const pendingResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM demandes_paiement
+                    WHERE LOWER(COALESCE(statut, 'pending'))
+                    IN (
+                        'pending',
+                        'en_attente',
+                        'en attente'
+                    )
+                `);
+
+
+            const validatedResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM demandes_paiement
+                    WHERE LOWER(COALESCE(statut, ''))
+                    IN (
+                        'validated',
+                        'valide',
+                        'validé',
+                        'approved',
+                        'approuve',
+                        'approuvé',
+                        'paid',
+                        'success'
+                    )
+                `);
+
+
+            const refusedResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM demandes_paiement
+                    WHERE LOWER(COALESCE(statut, ''))
+                    IN (
+                        'refused',
+                        'refuse',
+                        'refusé',
+                        'rejected',
+                        'rejete',
+                        'rejeté',
+                        'declined'
+                    )
+                `);
+
+
+            /* ====================================================
+               REVENUS
+            ==================================================== */
+
+            const revenueResult =
+                await pool.query(`
+                    SELECT
+                        COALESCE(
+                            SUM(
+                                CASE
+                                    WHEN LOWER(COALESCE(statut, ''))
+                                    IN (
+                                        'validated',
+                                        'valide',
+                                        'validé',
+                                        'approved',
+                                        'approuve',
+                                        'approuvé',
+                                        'paid',
+                                        'success'
+                                    )
+                                    THEN montant
+                                    ELSE 0
+                                END
+                            ),
+                            0
+                        )::NUMERIC AS revenue
+                    FROM demandes_paiement
+                `);
+
+
+            /* ====================================================
+               MESSAGES
+            ==================================================== */
+
+            const messagesResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM messages
+                `);
+
+
+            /* ====================================================
+               CERTIFICATS
+            ==================================================== */
+
+            const certificatesResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM certificates
+                `);
+
+
+            const authorizedCertificatesResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM certificates
+                    WHERE is_authorized = TRUE
+                `);
+
+
+            /* ====================================================
+               EXTRA : CERTIFICATS AUTORISÉS DANS USERS
+               
+               On récupère aussi cette valeur pour couvrir
+               les utilisateurs qui ont été autorisés directement
+               depuis la gestion utilisateur.
+            ==================================================== */
+
+            const authorizedUsersResult =
+                await pool.query(`
+                    SELECT COUNT(*)::INTEGER AS total
+                    FROM users
+                    WHERE certificat_autorise = TRUE
+                `);
+
+
+            /* ====================================================
+               VALEURS
+            ==================================================== */
+
+            const users =
+                Number(
+                    usersResult.rows[0]?.total || 0
+                );
+
+
+            const premium =
+                Number(
+                    premiumResult.rows[0]?.total || 0
+                );
+
+
+            const standard =
+                Number(
+                    standardResult.rows[0]?.total || 0
+                );
+
+
+            const blocked =
+                Number(
+                    blockedResult.rows[0]?.total || 0
+                );
+
+
+            const today =
+                Number(
+                    todayResult.rows[0]?.total || 0
+                );
+
+
+            const payments =
+                Number(
+                    paymentsResult.rows[0]?.total || 0
+                );
+
+
+            const pending =
+                Number(
+                    pendingResult.rows[0]?.total || 0
+                );
+
+
+            const validated =
+                Number(
+                    validatedResult.rows[0]?.total || 0
+                );
+
+
+            const refused =
+                Number(
+                    refusedResult.rows[0]?.total || 0
+                );
+
+
+            const messages =
+                Number(
+                    messagesResult.rows[0]?.total || 0
+                );
+
+
+            const certificates =
+                Number(
+                    certificatesResult.rows[0]?.total || 0
+                );
+
+
+            const certificatesAuthorized =
+                Number(
+                    authorizedCertificatesResult.rows[0]?.total || 0
+                );
+
+
+            const authorizedUsers =
+                Number(
+                    authorizedUsersResult.rows[0]?.total || 0
+                );
+
+
+            const revenue =
+                Number(
+                    revenueResult.rows[0]?.revenue || 0
+                );
+
+
+            /* ====================================================
+               RÉPONSE
+            ==================================================== */
+
+            res.json({
+
+                success: true,
+
+                stats: {
+
+                    users,
+
+                    premium,
+
+                    standard,
+
+                    blocked,
+
+                    today,
+
+                    payments,
+
+                    pending,
+
+                    validated,
+
+                    refused,
+
+                    revenue,
+
+                    messages,
+
+                    certificates,
+
+                    /*
+                     * On prend la valeur la plus représentative
+                     * entre la table certificates et users.
+                     */
+
+                    certificates_authorized:
+                        Math.max(
+                            certificatesAuthorized,
+                            authorizedUsers
+                        )
+
+                },
+
+                timestamp:
+                    new Date().toISOString()
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "Erreur statistiques admin :",
+                error
+            );
+
+
+            res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de récupérer les statistiques.",
+
+                error:
+                    process.env.NODE_ENV === "production"
+                        ? undefined
+                        : error.message
+
+            });
+
+        }
+
+    }
+);
 /* ============================================================
    NETTOYER LE SUJET
 ============================================================ */
