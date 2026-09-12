@@ -1790,7 +1790,381 @@ app.patch(
 
     }
 );
+/* ============================================================
+   STATISTIQUES ADMIN
+============================================================ */
 
+app.get(
+    "/api/admin/statistiques",
+    adminAuth,
+    async (req, res) => {
+
+        console.log(
+            "[ADMIN STATISTIQUES] Demande reçue"
+        );
+
+        try {
+
+            /* ====================================================
+               1. UTILISATEURS
+            ==================================================== */
+
+            const usersResult =
+                await pool.query(`
+                    SELECT
+
+                        COUNT(*)::INTEGER
+                            AS users,
+
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(
+                                is_premium,
+                                FALSE
+                            ) = TRUE
+                        )::INTEGER
+                            AS premium,
+
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(
+                                is_premium,
+                                FALSE
+                            ) = FALSE
+                        )::INTEGER
+                            AS standard,
+
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(
+                                is_blocked,
+                                FALSE
+                            ) = TRUE
+                        )::INTEGER
+                            AS blocked,
+
+                        COUNT(*) FILTER (
+                            WHERE created_at >= CURRENT_DATE
+                        )::INTEGER
+                            AS today
+
+                    FROM users
+                `);
+
+
+            const users =
+                usersResult.rows[0] || {};
+
+
+            /* ====================================================
+               2. PAIEMENTS
+            ==================================================== */
+
+            const paymentsResult =
+                await pool.query(`
+                    SELECT
+
+                        COUNT(*)::INTEGER
+                            AS payments,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                TRIM(
+                                    COALESCE(
+                                        statut,
+                                        ''
+                                    )
+                                )
+                            ) IN (
+                                'pending',
+                                'en attente',
+                                'attente'
+                            )
+                        )::INTEGER
+                            AS pending,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                TRIM(
+                                    COALESCE(
+                                        statut,
+                                        ''
+                                    )
+                                )
+                            ) IN (
+                                'validated',
+                                'valide',
+                                'validé',
+                                'approved',
+                                'approve',
+                                'approuve',
+                                'approuvé',
+                                'paid',
+                                'success'
+                            )
+                        )::INTEGER
+                            AS validated,
+
+                        COUNT(*) FILTER (
+                            WHERE LOWER(
+                                TRIM(
+                                    COALESCE(
+                                        statut,
+                                        ''
+                                    )
+                                )
+                            ) IN (
+                                'refused',
+                                'refuse',
+                                'refusé',
+                                'rejected',
+                                'reject',
+                                'cancelled',
+                                'canceled'
+                            )
+                        )::INTEGER
+                            AS refused,
+
+                        COALESCE(
+                            SUM(
+                                COALESCE(
+                                    montant,
+                                    0
+                                )
+                            ) FILTER (
+                                WHERE LOWER(
+                                    TRIM(
+                                        COALESCE(
+                                            statut,
+                                            ''
+                                        )
+                                    )
+                                ) IN (
+                                    'validated',
+                                    'valide',
+                                    'validé',
+                                    'approved',
+                                    'approve',
+                                    'approuve',
+                                    'approuvé',
+                                    'paid',
+                                    'success'
+                                )
+                            ),
+                            0
+                        )::NUMERIC
+                            AS revenue
+
+                    FROM demandes_paiement
+                `);
+
+
+            const payments =
+                paymentsResult.rows[0] || {};
+
+
+            /* ====================================================
+               3. MESSAGES
+            ==================================================== */
+
+            const messagesResult =
+                await pool.query(`
+                    SELECT
+                        COUNT(*)::INTEGER
+                            AS messages
+                    FROM messages
+                `);
+
+
+            const messages =
+                messagesResult.rows[0] || {};
+
+
+            /* ====================================================
+               4. CERTIFICATS
+            ==================================================== */
+
+            const certificatesResult =
+                await pool.query(`
+                    SELECT
+
+                        COUNT(*)::INTEGER
+                            AS certificates,
+
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(
+                                is_authorized,
+                                FALSE
+                            ) = TRUE
+                        )::INTEGER
+                            AS certificates_authorized
+
+                    FROM certificates
+                `);
+
+
+            const certificates =
+                certificatesResult.rows[0] || {};
+
+
+            /* ====================================================
+               5. CONSTRUCTION OBJET STATISTIQUES
+            ==================================================== */
+
+            const stats = {
+
+                /* Utilisateurs */
+
+                users:
+                    Number(
+                        users.users || 0
+                    ),
+
+                premium:
+                    Number(
+                        users.premium || 0
+                    ),
+
+                standard:
+                    Number(
+                        users.standard || 0
+                    ),
+
+                blocked:
+                    Number(
+                        users.blocked || 0
+                    ),
+
+                today:
+                    Number(
+                        users.today || 0
+                    ),
+
+
+                /* Paiements */
+
+                payments:
+                    Number(
+                        payments.payments || 0
+                    ),
+
+                pending:
+                    Number(
+                        payments.pending || 0
+                    ),
+
+                validated:
+                    Number(
+                        payments.validated || 0
+                    ),
+
+                refused:
+                    Number(
+                        payments.refused || 0
+                    ),
+
+                revenue:
+                    Number(
+                        payments.revenue || 0
+                    ),
+
+
+                /* Messages */
+
+                messages:
+                    Number(
+                        messages.messages || 0
+                    ),
+
+
+                /* Certificats */
+
+                certificates:
+                    Number(
+                        certificates.certificates || 0
+                    ),
+
+                certificates_authorized:
+                    Number(
+                        certificates
+                            .certificates_authorized || 0
+                    )
+
+            };
+
+
+            /* ====================================================
+               6. LOG SERVEUR
+            ==================================================== */
+
+            console.log(
+                "[ADMIN STATISTIQUES] Résultat :",
+                stats
+            );
+
+
+            /* ====================================================
+               7. RÉPONSE FRONTEND
+            ==================================================== */
+
+            return res.status(200).json({
+
+                success: true,
+
+                stats: stats,
+
+                message:
+                    "Statistiques récupérées avec succès",
+
+                generated_at:
+                    new Date().toISOString()
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "[ADMIN STATISTIQUES] ERREUR :"
+            );
+
+            console.error(
+                "Message :",
+                error.message
+            );
+
+            console.error(
+                "Code PostgreSQL :",
+                error.code
+            );
+
+            console.error(
+                "Detail :",
+                error.detail
+            );
+
+            console.error(
+                "Hint :",
+                error.hint
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Impossible de récupérer les statistiques administrateur",
+
+                error:
+                    error.message || "Erreur inconnue",
+
+                code:
+                    error.code || null
+
+            });
+
+        }
+
+    }
+);
 
 /* ============================================================
    MODIFIER MOT DE PASSE UTILISATEUR
