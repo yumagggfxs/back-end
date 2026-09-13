@@ -1472,6 +1472,7 @@ app.get(
             today: 0,
 
             payments: 0,
+            totalPayments: 0,
             pending: 0,
             validated: 0,
             refused: 0,
@@ -1480,15 +1481,14 @@ app.get(
             messages: 0,
 
             certificates: 0,
-            certificates_authorized: 0
+            certificates_authorized: 0,
+            authorizedCertificates: 0
         };
 
 
-        /*
-         * Chaque groupe est indépendant.
-         * Une erreur secondaire ne doit pas empêcher
-         * toutes les autres statistiques d'être envoyées.
-         */
+        /* =====================================================
+           UTILISATEURS
+        ===================================================== */
 
         try {
 
@@ -1496,7 +1496,9 @@ app.get(
                 await pool.query(
                     `
                     SELECT
-                        COUNT(*)::INTEGER AS users,
+
+                        COUNT(*)::INTEGER
+                            AS users,
 
                         COUNT(*)
                         FILTER (
@@ -1504,7 +1506,8 @@ app.get(
                                 is_premium,
                                 FALSE
                             ) = TRUE
-                        )::INTEGER AS premium,
+                        )::INTEGER
+                            AS premium,
 
                         COUNT(*)
                         FILTER (
@@ -1512,7 +1515,8 @@ app.get(
                                 is_premium,
                                 FALSE
                             ) = FALSE
-                        )::INTEGER AS standard,
+                        )::INTEGER
+                            AS standard,
 
                         COUNT(*)
                         FILTER (
@@ -1520,12 +1524,15 @@ app.get(
                                 is_blocked,
                                 FALSE
                             ) = TRUE
-                        )::INTEGER AS blocked,
+                        )::INTEGER
+                            AS blocked,
 
                         COUNT(*)
                         FILTER (
                             WHERE created_at >= CURRENT_DATE
-                        )::INTEGER AS today
+                            AND created_at < CURRENT_DATE + INTERVAL '1 day'
+                        )::INTEGER
+                            AS today
 
                     FROM users
                     `
@@ -1537,29 +1544,35 @@ app.get(
 
 
             stats.users =
-                Number(
-                    row.users || 0
-                );
+                Number(row.users || 0);
+
 
             stats.premium =
-                Number(
-                    row.premium || 0
-                );
+                Number(row.premium || 0);
+
 
             stats.standard =
-                Number(
-                    row.standard || 0
-                );
+                Number(row.standard || 0);
+
 
             stats.blocked =
-                Number(
-                    row.blocked || 0
-                );
+                Number(row.blocked || 0);
+
 
             stats.today =
-                Number(
-                    row.today || 0
-                );
+                Number(row.today || 0);
+
+
+            console.log(
+                "[ADMIN STATS] Utilisateurs :",
+                {
+                    users: stats.users,
+                    premium: stats.premium,
+                    standard: stats.standard,
+                    blocked: stats.blocked,
+                    today: stats.today
+                }
+            );
 
 
         } catch (error) {
@@ -1598,7 +1611,6 @@ app.get(
                             WHERE LOWER(
                                 COALESCE(statut, '')
                             ) IN (
-                                'valide',
                                 'valide',
                                 'validated',
                                 'approved',
@@ -1652,29 +1664,27 @@ app.get(
 
 
             stats.payments =
-                Number(
-                    row.total || 0
-                );
+                Number(row.total || 0);
+
+
+            stats.totalPayments =
+                Number(row.total || 0);
+
 
             stats.pending =
-                Number(
-                    row.pending || 0
-                );
+                Number(row.pending || 0);
+
 
             stats.validated =
-                Number(
-                    row.validated || 0
-                );
+                Number(row.validated || 0);
+
 
             stats.refused =
-                Number(
-                    row.refused || 0
-                );
+                Number(row.refused || 0);
+
 
             stats.revenue =
-                Number(
-                    row.revenue || 0
-                );
+                Number(row.revenue || 0);
 
 
         } catch (error) {
@@ -1695,8 +1705,8 @@ app.get(
             const result =
                 await pool.query(
                     `
-                    SELECT COUNT(*)::INTEGER
-                    AS total
+                    SELECT
+                        COUNT(*)::INTEGER AS total
                     FROM messages
                     `
                 );
@@ -1750,10 +1760,15 @@ app.get(
                     result.rows[0]?.total || 0
                 );
 
+
             stats.certificates_authorized =
                 Number(
                     result.rows[0]?.authorized || 0
                 );
+
+
+            stats.authorizedCertificates =
+                stats.certificates_authorized;
 
 
         } catch (error) {
@@ -1766,16 +1781,28 @@ app.get(
 
 
         console.log(
-            "[ADMIN STATS] Résultat:",
+            "[ADMIN STATS] Résultat final :",
             stats
         );
 
+
+        /* =====================================================
+           RÉPONSE API
+        ===================================================== */
 
         return res.json({
 
             success: true,
 
-            stats,
+            /*
+             * Format principal utilisé par le frontend
+             */
+            stats: stats,
+
+            /*
+             * Compatibilité avec ton ancien frontend
+             */
+            statistiques: stats,
 
             message:
                 "Statistiques récupérées avec succès",
@@ -1783,91 +1810,9 @@ app.get(
             generated_at:
                 new Date().toISOString()
         });
+
     }
 );
-
-
-/* ============================================================
-   TEST STATISTIQUES
-============================================================ */
-
-app.get(
-    "/api/admin/statistiques/test",
-    adminAuth,
-    async (req, res) => {
-
-        try {
-
-            const result =
-                await pool.query(
-                    `
-                    SELECT
-
-                        (
-                            SELECT COUNT(*)
-                            FROM users
-                        ) AS users,
-
-                        (
-                            SELECT COUNT(*)
-                            FROM demandes_paiement
-                        ) AS payments,
-
-                        (
-                            SELECT COUNT(*)
-                            FROM messages
-                        ) AS messages,
-
-                        (
-                            SELECT COUNT(*)
-                            FROM certificates
-                        ) AS certificates
-                    `
-                );
-
-
-            res.json({
-
-                success: true,
-
-                database: true,
-
-                test:
-                    result.rows[0],
-
-                message:
-                    "Connexion statistiques opérationnelle",
-
-                generated_at:
-                    new Date().toISOString()
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                "[ADMIN STATS TEST]",
-                error
-            );
-
-
-            res.status(500).json({
-
-                success: false,
-
-                database: false,
-
-                message:
-                    "Test statistiques échoué",
-
-                error:
-                    error.message
-            });
-        }
-    }
-);
-
-
 /* ============================================================
    LISTE UTILISATEURS ADMIN
 ============================================================ */
