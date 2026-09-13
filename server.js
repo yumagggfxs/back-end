@@ -1,14 +1,9 @@
-/* ============================================================
-   BMJ SERVICE
-   SERVEUR COMPLET
-   PostgreSQL + Express
-============================================================ */
-
 "use strict";
 
-
 /* ============================================================
-   IMPORTATIONS
+   BMJ SERVICE
+   BACKEND COMPLET
+   Express + PostgreSQL
 ============================================================ */
 
 const express = require("express");
@@ -16,13 +11,7 @@ const cors = require("cors");
 const crypto = require("crypto");
 const { Pool } = require("pg");
 
-
-/* ============================================================
-   APPLICATION
-============================================================ */
-
 const app = express();
-
 
 /* ============================================================
    CONFIGURATION
@@ -31,24 +20,8 @@ const app = express();
 const PORT =
     process.env.PORT || 10000;
 
-
-/*
- * IMPORTANT :
- * Sur Render, DATABASE_URL doit être configurée
- * dans les variables d'environnement.
- *
- * Le fallback ci-dessous est conservé pour
- * compatibilité avec ton serveur actuel.
- */
-
 const DATABASE_URL =
-    process.env.DATABASE_URL ||
-    "postgresql://name_bmj_db_user:TjgoLRbYV0LizRgBFD1nepGqSqErgBgD@dpg-dagn0e15efls73b8rjh0-a/name_bmj_db";
-
-
-/* ============================================================
-   ADMINISTRATEUR
-============================================================ */
+    process.env.DATABASE_URL || "postgresql://name_bmj_db_user:TjgoLRbYV0LizRgBFD1nepGqSqErgBgD@dpg-dagn0e15efls73b8rjh0-a/name_bmj_db";
 
 const ADMIN_EMAIL =
     process.env.ADMIN_EMAIL ||
@@ -63,23 +36,24 @@ const ADMIN_PASSWORD =
    POSTGRESQL
 ============================================================ */
 
-const pool = new Pool({
+const pool =
+    new Pool({
+        connectionString: DATABASE_URL,
 
-    connectionString:
-        DATABASE_URL,
+        ssl: DATABASE_URL
+            ? {
+                rejectUnauthorized: false
+            }
+            : false,
 
-    ssl: {
-        rejectUnauthorized: false
-    },
+        max: 10,
 
-    max: 10,
+        idleTimeoutMillis:
+            30000,
 
-    idleTimeoutMillis:
-        30000,
-
-    connectionTimeoutMillis:
-        10000
-});
+        connectionTimeoutMillis:
+            10000
+    });
 
 
 /* ============================================================
@@ -88,9 +62,7 @@ const pool = new Pool({
 
 app.use(
     cors({
-
-        origin: "*",
-
+        origin: true,
         methods: [
             "GET",
             "POST",
@@ -99,21 +71,19 @@ app.use(
             "DELETE",
             "OPTIONS"
         ],
-
         allowedHeaders: [
             "Content-Type",
             "Authorization",
-            "X-Admin-Token"
+            "X-Admin-Token",
+            "x-admin-token"
         ],
-
         credentials: false
-
     })
 );
 
 
 /* ============================================================
-   BODY PARSER
+   BODY
 ============================================================ */
 
 app.use(
@@ -131,18 +101,17 @@ app.use(
 
 
 /* ============================================================
-   JOURNALISATION DES REQUÊTES
+   LOGGER
 ============================================================ */
 
 app.use(
     (req, res, next) => {
 
         console.log(
-            `[${new Date().toISOString()}] ${req.method} ${req.url}`
+            `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
         );
 
         next();
-
     }
 );
 
@@ -154,15 +123,60 @@ app.use(
 function clean(value) {
 
     if (
-        value === undefined ||
-        value === null
+        value === null ||
+        value === undefined
     ) {
-
         return "";
-
     }
 
     return String(value).trim();
+}
+
+
+function safeNumber(
+    value,
+    fallback = 0
+) {
+
+    const number =
+        Number(value);
+
+    return Number.isFinite(number)
+        ? number
+        : fallback;
+}
+
+
+function clampProgress(value) {
+
+    const number =
+        safeNumber(value, 0);
+
+    return Math.min(
+        100,
+        Math.max(
+            0,
+            Math.round(number)
+        )
+    );
+}
+
+
+function booleanValue(value) {
+
+    return (
+        value === true ||
+        value === "true" ||
+        value === 1 ||
+        value === "1"
+    );
+}
+
+
+function isValidEmail(email) {
+
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+        .test(email);
 }
 
 
@@ -172,7 +186,6 @@ function hashPassword(password) {
         .createHash("sha256")
         .update(String(password))
         .digest("hex");
-
 }
 
 
@@ -181,7 +194,6 @@ function createToken() {
     return crypto
         .randomBytes(48)
         .toString("hex");
-
 }
 
 
@@ -191,75 +203,6 @@ function tokenHash(token) {
         .createHash("sha256")
         .update(String(token))
         .digest("hex");
-
-}
-
-
-function safeNumber(
-    value,
-    fallback = 0
-) {
-
-    const n =
-        Number(value);
-
-    if (
-        !Number.isFinite(n)
-    ) {
-
-        return fallback;
-
-    }
-
-    return n;
-
-}
-
-
-function clampProgress(value) {
-
-    let progress =
-        safeNumber(
-            value,
-            0
-        );
-
-    if (progress < 0) {
-        progress = 0;
-    }
-
-    if (progress > 100) {
-        progress = 100;
-    }
-
-    return Math.round(progress);
-
-}
-
-
-function booleanValue(value) {
-
-    if (
-        value === true ||
-        value === "true" ||
-        value === 1 ||
-        value === "1"
-    ) {
-
-        return true;
-
-    }
-
-    return false;
-
-}
-
-
-function isValidEmail(email) {
-
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-        .test(email);
-
 }
 
 
@@ -269,30 +212,63 @@ function publicUser(user) {
         return null;
     }
 
-    const result = {
+    const copy = {
         ...user
     };
 
-    delete result.password;
+    delete copy.password;
 
-    return result;
+    return copy;
+}
 
+
+function normalizeMessagePriority(
+    priority
+) {
+
+    const allowed = [
+        "normal",
+        "important",
+        "urgent"
+    ];
+
+    const value =
+        clean(priority)
+            .toLowerCase();
+
+    return allowed.includes(value)
+        ? value
+        : "normal";
+}
+
+
+function normalizeMessageSubject(
+    subject
+) {
+
+    const value =
+        clean(subject);
+
+    if (!value) {
+        return "Message BMJ SERVICE";
+    }
+
+    return value.substring(0, 200);
+}
+
+
+function normalizeMessageContent(
+    message
+) {
+
+    return clean(message);
 }
 
 
 /* ============================================================
-   AUTHENTIFICATION ADMIN
+   TOKEN ADMIN
+   UNIQUEMENT EN MÉMOIRE
 ============================================================ */
-
-/*
- * IMPORTANT :
- * Les tokens admin sont conservés UNIQUEMENT
- * dans la mémoire du serveur.
- *
- * Aucun localStorage.
- * Aucun sessionStorage.
- * Aucun token admin en base.
- */
 
 const adminTokens =
     new Map();
@@ -303,45 +279,48 @@ function getAdminToken(req) {
     const authorization =
         req.headers.authorization || "";
 
-
     if (
         authorization &&
-        authorization.startsWith("Bearer ")
+        authorization
+            .toLowerCase()
+            .startsWith("bearer ")
     ) {
 
         return authorization
             .substring(7)
             .trim();
-
     }
 
 
-    if (
-        req.headers["x-admin-token"]
-    ) {
+    const headerToken =
+        req.headers["x-admin-token"];
+
+    if (headerToken) {
 
         return String(
-            req.headers["x-admin-token"]
+            headerToken
         ).trim();
-
     }
 
 
-    if (
-        req.query.token
-    ) {
+    const queryToken =
+        req.query.token;
+
+    if (queryToken) {
 
         return String(
-            req.query.token
+            queryToken
         ).trim();
-
     }
 
 
     return null;
-
 }
 
+
+/* ============================================================
+   AUTH ADMIN
+============================================================ */
 
 function adminAuth(
     req,
@@ -352,18 +331,17 @@ function adminAuth(
     const token =
         getAdminToken(req);
 
-
     if (!token) {
 
-        return res.status(401).json({
-
-            success: false,
-
-            message:
-                "Token administrateur manquant"
-
-        });
-
+        return res
+            .status(401)
+            .json({
+                success: false,
+                message:
+                    "Token administrateur manquant",
+                code:
+                    "ADMIN_TOKEN_MISSING"
+            });
     }
 
 
@@ -375,15 +353,15 @@ function adminAuth(
 
     if (!saved) {
 
-        return res.status(401).json({
-
-            success: false,
-
-            message:
-                "Token administrateur invalide ou expiré"
-
-        });
-
+        return res
+            .status(401)
+            .json({
+                success: false,
+                message:
+                    "Token administrateur invalide",
+                code:
+                    "ADMIN_TOKEN_INVALID"
+            });
     }
 
 
@@ -394,7 +372,6 @@ function adminAuth(
         token;
 
     next();
-
 }
 
 
@@ -418,11 +395,7 @@ async function logAdminAction(
                 details
             )
             VALUES
-            (
-                $1,
-                $2,
-                $3
-            )
+            ($1, $2, $3)
             `,
             [
                 action,
@@ -437,38 +410,35 @@ async function logAdminAction(
             "Erreur journal admin :",
             error.message
         );
-
     }
-
 }
 
 
 /* ============================================================
-   INITIALISATION / MIGRATION BASE
+   INITIALISATION BASE
+   AUCUNE SUPPRESSION DE DONNÉES
 ============================================================ */
 
 async function initDatabase() {
 
-    let client;
+    const client =
+        await pool.connect();
 
     try {
 
-        client =
-            await pool.connect();
-
-
-        console.log(
-            "Connexion PostgreSQL réussie."
+        await client.query(
+            "BEGIN"
         );
 
 
-        /* ====================================================
-           TABLE USERS
-        ==================================================== */
+        /* =====================================================
+           USERS
+        ===================================================== */
 
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS users (
-
+        await client.query(
+            `
+            CREATE TABLE IF NOT EXISTS users
+            (
                 id SERIAL PRIMARY KEY,
 
                 nom VARCHAR(255),
@@ -486,104 +456,119 @@ async function initDatabase() {
 
                 created_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
-
             )
-        `);
+            `
+        );
 
 
-        /* ====================================================
-           COLONNES UTILISATEURS
-        ==================================================== */
+        const userColumns = [
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS telephone VARCHAR(50)
-        `);
+            [
+                "telephone",
+                "VARCHAR(50)"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS domaine VARCHAR(255)
-        `);
+            [
+                "domaine",
+                "VARCHAR(255)"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS photo TEXT
-        `);
+            [
+                "photo",
+                "TEXT"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS progression INTEGER DEFAULT 0
-        `);
+            [
+                "progression",
+                "INTEGER DEFAULT 0"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS certificat_autorise BOOLEAN DEFAULT FALSE
-        `);
+            [
+                "certificat_autorise",
+                "BOOLEAN DEFAULT FALSE"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS certificat_obtenu BOOLEAN DEFAULT FALSE
-        `);
+            [
+                "certificat_obtenu",
+                "BOOLEAN DEFAULT FALSE"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS premium_until TIMESTAMP NULL
-        `);
+            [
+                "premium_until",
+                "TIMESTAMP NULL"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS last_login TIMESTAMP NULL
-        `);
+            [
+                "last_login",
+                "TIMESTAMP NULL"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        `);
+            [
+                "updated_at",
+                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS notes_admin TEXT DEFAULT ''
-        `);
+            [
+                "notes_admin",
+                "TEXT DEFAULT ''"
+            ],
 
-        /*
-         * Champs utilisés par la page d'inscription
-         */
+            [
+                "sexe",
+                "VARCHAR(50)"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS sexe VARCHAR(50)
-        `);
+            [
+                "pays",
+                "VARCHAR(100)"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS pays VARCHAR(100)
-        `);
+            [
+                "ville",
+                "VARCHAR(150)"
+            ],
 
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS ville VARCHAR(150)
-        `);
-
-        await client.query(`
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS niveau VARCHAR(100)
-        `);
+            [
+                "niveau",
+                "VARCHAR(100)"
+            ]
+        ];
 
 
-        /* ====================================================
+        for (
+            const [
+                column,
+                type
+            ]
+            of userColumns
+        ) {
+
+            await client.query(
+                `
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS
+                ${column} ${type}
+                `
+            );
+        }
+
+
+        /* =====================================================
            DEMANDES PAIEMENT
-        ==================================================== */
+        ===================================================== */
 
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS demandes_paiement (
-
+        await client.query(
+            `
+            CREATE TABLE IF NOT EXISTS demandes_paiement
+            (
                 id SERIAL PRIMARY KEY,
 
                 user_id INTEGER
                     REFERENCES users(id)
                     ON DELETE CASCADE,
 
-                telephone_paiement VARCHAR(50),
+                telephone_paiement
+                    VARCHAR(50),
 
                 montant NUMERIC(10,2)
                     NOT NULL,
@@ -594,76 +579,104 @@ async function initDatabase() {
                 statut VARCHAR(50)
                     DEFAULT 'pending',
 
-                reference_paiement VARCHAR(255),
+                reference_paiement
+                    VARCHAR(255),
 
-                preuve_paiement TEXT,
+                preuve_paiement
+                    TEXT,
 
                 created_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP,
 
                 updated_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
-
             )
-        `);
+            `
+        );
 
 
-        await client.query(`
-            ALTER TABLE demandes_paiement
-            ADD COLUMN IF NOT EXISTS reference_paiement VARCHAR(255)
-        `);
+        const paymentColumns = [
 
-        await client.query(`
-            ALTER TABLE demandes_paiement
-            ADD COLUMN IF NOT EXISTS preuve_paiement TEXT
-        `);
+            [
+                "reference_paiement",
+                "VARCHAR(255)"
+            ],
 
-        await client.query(`
-            ALTER TABLE demandes_paiement
-            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        `);
+            [
+                "preuve_paiement",
+                "TEXT"
+            ],
 
-        await client.query(`
-            ALTER TABLE demandes_paiement
-            ADD COLUMN IF NOT EXISTS admin_note TEXT DEFAULT ''
-        `);
+            [
+                "updated_at",
+                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ],
+
+            [
+                "admin_note",
+                "TEXT DEFAULT ''"
+            ]
+        ];
 
 
-        /* ====================================================
+        for (
+            const [
+                column,
+                type
+            ]
+            of paymentColumns
+        ) {
+
+            await client.query(
+                `
+                ALTER TABLE demandes_paiement
+                ADD COLUMN IF NOT EXISTS
+                ${column} ${type}
+                `
+            );
+        }
+
+
+        /* =====================================================
            ADMIN ACTIVITY
-        ==================================================== */
+        ===================================================== */
 
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS admin_activity (
-
+        await client.query(
+            `
+            CREATE TABLE IF NOT EXISTS admin_activity
+            (
                 id SERIAL PRIMARY KEY,
 
-                action TEXT NOT NULL,
+                action VARCHAR(255),
 
                 admin_email VARCHAR(255),
 
-                details TEXT DEFAULT '',
+                details TEXT,
 
                 created_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
-
             )
-        `);
+            `
+        );
 
 
-        await client.query(`
+        await client.query(
+            `
             ALTER TABLE admin_activity
-            ADD COLUMN IF NOT EXISTS details TEXT DEFAULT ''
-        `);
+            ADD COLUMN IF NOT EXISTS
+            details TEXT
+            `
+        );
 
 
-        /* ====================================================
+        /* =====================================================
            MESSAGES
-        ==================================================== */
+        ===================================================== */
 
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS messages (
-
+        await client.query(
+            `
+            CREATE TABLE IF NOT EXISTS messages
+            (
                 id SERIAL PRIMARY KEY,
 
                 sender_type VARCHAR(30)
@@ -701,81 +714,106 @@ async function initDatabase() {
 
                 updated_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
-
             )
-        `);
+            `
+        );
 
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS sender_type VARCHAR(30)
-            DEFAULT 'admin'
-        `);
+        const messageColumns = [
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS sender_id INTEGER NULL
-        `);
+            [
+                "sender_type",
+                "VARCHAR(30) DEFAULT 'admin'"
+            ],
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS recipient_type VARCHAR(30)
-            DEFAULT 'individual'
-        `);
+            [
+                "sender_id",
+                "INTEGER NULL"
+            ],
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS recipient_user_id INTEGER NULL
-        `);
+            [
+                "recipient_type",
+                "VARCHAR(30) DEFAULT 'individual'"
+            ],
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS audience VARCHAR(30)
-            DEFAULT 'individual'
-        `);
+            [
+                "recipient_user_id",
+                "INTEGER NULL"
+            ],
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS subject VARCHAR(255)
-        `);
+            [
+                "audience",
+                "VARCHAR(30) DEFAULT 'individual'"
+            ],
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS priority VARCHAR(30)
-            DEFAULT 'normal'
-        `);
+            [
+                "subject",
+                "VARCHAR(255)"
+            ],
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS is_read BOOLEAN
-            DEFAULT FALSE
-        `);
+            [
+                "message",
+                "TEXT"
+            ],
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS is_archived BOOLEAN
-            DEFAULT FALSE
-        `);
+            [
+                "priority",
+                "VARCHAR(30) DEFAULT 'normal'"
+            ],
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS parent_id INTEGER NULL
-        `);
+            [
+                "is_read",
+                "BOOLEAN DEFAULT FALSE"
+            ],
 
-        await client.query(`
-            ALTER TABLE messages
-            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP
-            DEFAULT CURRENT_TIMESTAMP
-        `);
+            [
+                "is_archived",
+                "BOOLEAN DEFAULT FALSE"
+            ],
+
+            [
+                "parent_id",
+                "INTEGER NULL"
+            ],
+
+            [
+                "created_at",
+                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ],
+
+            [
+                "updated_at",
+                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ]
+        ];
 
 
-        /* ====================================================
+        for (
+            const [
+                column,
+                type
+            ]
+            of messageColumns
+        ) {
+
+            await client.query(
+                `
+                ALTER TABLE messages
+                ADD COLUMN IF NOT EXISTS
+                ${column} ${type}
+                `
+            );
+        }
+
+
+        /* =====================================================
            NOTIFICATIONS
-        ==================================================== */
+        ===================================================== */
 
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS notifications (
-
+        await client.query(
+            `
+            CREATE TABLE IF NOT EXISTS notifications
+            (
                 id SERIAL PRIMARY KEY,
 
                 user_id INTEGER
@@ -784,7 +822,7 @@ async function initDatabase() {
 
                 title VARCHAR(255),
 
-                message TEXT NOT NULL,
+                message TEXT,
 
                 type VARCHAR(50)
                     DEFAULT 'info',
@@ -794,18 +832,19 @@ async function initDatabase() {
 
                 created_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
-
             )
-        `);
+            `
+        );
 
 
-        /* ====================================================
-           CERTIFICATS
-        ==================================================== */
+        /* =====================================================
+           CERTIFICATES
+        ===================================================== */
 
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS certificates (
-
+        await client.query(
+            `
+            CREATE TABLE IF NOT EXISTS certificates
+            (
                 id SERIAL PRIMARY KEY,
 
                 user_id INTEGER
@@ -833,18 +872,81 @@ async function initDatabase() {
 
                 updated_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
-
             )
-        `);
+            `
+        );
 
 
-        /* ====================================================
-           PROGRESSION DES COURS
-        ==================================================== */
+        const certificateColumns = [
 
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_progress (
+            [
+                "domaine",
+                "VARCHAR(255)"
+            ],
 
+            [
+                "titre",
+                "VARCHAR(255)"
+            ],
+
+            [
+                "certificat_url",
+                "TEXT"
+            ],
+
+            [
+                "certificate_code",
+                "VARCHAR(255)"
+            ],
+
+            [
+                "is_authorized",
+                "BOOLEAN DEFAULT FALSE"
+            ],
+
+            [
+                "downloaded",
+                "BOOLEAN DEFAULT FALSE"
+            ],
+
+            [
+                "downloaded_at",
+                "TIMESTAMP NULL"
+            ],
+
+            [
+                "updated_at",
+                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ]
+        ];
+
+
+        for (
+            const [
+                column,
+                type
+            ]
+            of certificateColumns
+        ) {
+
+            await client.query(
+                `
+                ALTER TABLE certificates
+                ADD COLUMN IF NOT EXISTS
+                ${column} ${type}
+                `
+            );
+        }
+
+
+        /* =====================================================
+           USER PROGRESS
+        ===================================================== */
+
+        await client.query(
+            `
+            CREATE TABLE IF NOT EXISTS user_progress
+            (
                 id SERIAL PRIMARY KEY,
 
                 user_id INTEGER
@@ -857,11 +959,9 @@ async function initDatabase() {
                 progression INTEGER
                     DEFAULT 0,
 
-                chapitre_actuel INTEGER
-                    DEFAULT 0,
+                chapitre_actuel INTEGER,
 
-                chapitre_total INTEGER
-                    DEFAULT 0,
+                chapitre_total INTEGER,
 
                 statut VARCHAR(50)
                     DEFAULT 'en_cours',
@@ -870,18 +970,19 @@ async function initDatabase() {
                     DEFAULT CURRENT_TIMESTAMP,
 
                 UNIQUE(user_id, domaine)
-
             )
-        `);
+            `
+        );
 
 
-        /* ====================================================
-           JOURNAL UTILISATEURS
-        ==================================================== */
+        /* =====================================================
+           USER ACTIVITY
+        ===================================================== */
 
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_activity (
-
+        await client.query(
+            `
+            CREATE TABLE IF NOT EXISTS user_activity
+            (
                 id SERIAL PRIMARY KEY,
 
                 user_id INTEGER
@@ -890,87 +991,117 @@ async function initDatabase() {
 
                 action VARCHAR(255),
 
-                details TEXT DEFAULT '',
+                details TEXT,
 
                 created_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
-
             )
-        `);
+            `
+        );
 
 
-        /* ====================================================
+        /* =====================================================
            INDEX
-        ==================================================== */
+        ===================================================== */
 
-        await client.query(`
+        await client.query(
+            `
             CREATE INDEX IF NOT EXISTS
             idx_users_email
             ON users(email)
-        `);
+            `
+        );
 
-        await client.query(`
+
+        await client.query(
+            `
             CREATE INDEX IF NOT EXISTS
             idx_users_created_at
             ON users(created_at)
-        `);
+            `
+        );
 
-        await client.query(`
+
+        await client.query(
+            `
             CREATE INDEX IF NOT EXISTS
             idx_messages_recipient
             ON messages(recipient_user_id)
-        `);
+            `
+        );
 
-        await client.query(`
+
+        await client.query(
+            `
             CREATE INDEX IF NOT EXISTS
             idx_messages_created
             ON messages(created_at)
-        `);
+            `
+        );
 
-        await client.query(`
+
+        await client.query(
+            `
             CREATE INDEX IF NOT EXISTS
             idx_notifications_user
             ON notifications(user_id)
-        `);
+            `
+        );
 
-        await client.query(`
+
+        await client.query(
+            `
             CREATE INDEX IF NOT EXISTS
             idx_progress_user
             ON user_progress(user_id)
-        `);
+            `
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
 
 
         console.log(
-            "Base BMJ SERVICE vérifiée et mise à niveau."
+            "=============================================="
+        );
+
+        console.log(
+            "Base BMJ SERVICE vérifiée."
         );
 
         console.log(
             "Aucune donnée existante n'a été supprimée."
         );
 
+        console.log(
+            "=============================================="
+        );
+
 
     } catch (error) {
 
+        await client.query(
+            "ROLLBACK"
+        );
+
         console.error(
-            "ERREUR INITIALISATION BASE :",
+            "Erreur initialisation DB :",
             error
         );
 
+        throw error;
+
     } finally {
 
-        if (client) {
-
-            client.release();
-
-        }
-
+        client.release();
     }
-
 }
 
 
 /* ============================================================
-   ROUTES DE SANTÉ
+   ROUTE RACINE
 ============================================================ */
 
 app.get(
@@ -978,40 +1109,34 @@ app.get(
     (req, res) => {
 
         res.json({
-
             success: true,
-
             message:
                 "BMJ SERVICE API opérationnelle",
-
             version:
-                "21.0.0",
-
+                "30.0.0",
             database:
                 "PostgreSQL",
-
+            status:
+                "online",
             features: [
-
-                "users",
-                "registration",
-                "login",
-                "profiles",
+                "administration",
+                "utilisateurs",
+                "paiements",
                 "premium",
-                "blocking",
-                "progression",
-                "certificates",
                 "messages",
-                "payments",
                 "notifications",
-                "admin"
-
+                "certificats",
+                "progression",
+                "activites"
             ]
-
         });
-
     }
 );
 
+
+/* ============================================================
+   HEALTH
+============================================================ */
 
 app.get(
     "/api/health",
@@ -1024,40 +1149,35 @@ app.get(
             );
 
             res.json({
-
                 success: true,
-
-                status: "online",
-
-                database:
-                    "connected",
-
+                status: "ok",
+                database: "connected",
                 timestamp:
                     new Date().toISOString()
-
             });
 
         } catch (error) {
 
+            console.error(
+                "Health error:",
+                error
+            );
+
             res.status(500).json({
-
                 success: false,
-
-                status: "online",
-
-                database:
-                    "error",
-
+                status: "error",
+                database: "disconnected",
                 message:
-                    error.message
-
+                    "Base de données inaccessible"
             });
-
         }
-
     }
 );
 
+
+/* ============================================================
+   TEST DB
+============================================================ */
 
 app.get(
     "/api/test-db",
@@ -1067,35 +1187,108 @@ app.get(
 
             const result =
                 await pool.query(
-                    "SELECT NOW() AS now"
+                    "SELECT NOW() AS time"
                 );
 
             res.json({
-
                 success: true,
-
-                database: true,
-
+                database: "connected",
                 time:
-                    result.rows[0].now
-
+                    result.rows[0].time
             });
 
         } catch (error) {
 
             res.status(500).json({
-
                 success: false,
-
-                database: false,
-
                 message:
+                    "Erreur PostgreSQL",
+                error:
                     error.message
-
             });
-
         }
+    }
+);
 
+
+/* ============================================================
+   LISTE DES API
+============================================================ */
+
+app.get(
+    "/api",
+    (req, res) => {
+
+        res.json({
+            success: true,
+
+            message:
+                "API BMJ SERVICE disponible",
+
+            routes: [
+
+                "GET /",
+                "GET /api",
+                "GET /api/health",
+                "GET /api/test-db",
+
+                "POST /api/admin/login",
+                "GET /api/admin/session",
+                "DELETE /api/admin/login",
+
+                "GET /api/admin/statistiques",
+                "GET /api/admin/statistiques/test",
+
+                "GET /api/admin/users",
+                "GET /api/admin/users/:id",
+
+                "PATCH /api/admin/users/:id",
+                "PATCH /api/admin/users/:id/password",
+                "PATCH /api/admin/users/:id/block",
+                "PATCH /api/admin/users/:id/unblock",
+                "PATCH /api/admin/users/:id/premium",
+                "PATCH /api/admin/users/:id/premium/remove",
+                "PATCH /api/admin/users/:id/progression",
+                "PATCH /api/admin/users/:id/progression/domaine",
+                "PATCH /api/admin/users/:id/certificat",
+                "PATCH /api/admin/users/:id/certificat-obtenu",
+
+                "POST /api/admin/certificates",
+                "GET /api/admin/users/:id/certificates",
+
+                "GET /api/admin/users/:id/messages",
+                "GET /api/admin/users/:id/notifications",
+                "GET /api/admin/users/:id/activity",
+
+                "POST /api/admin/messages/user",
+                "POST /api/admin/messages/all",
+                "POST /api/admin/messages/premium",
+                "POST /api/admin/messages/standard",
+                "POST /api/admin/messages/:id/reply",
+
+                "GET /api/admin/demandes-paiement",
+                "PATCH /api/demandes-paiement/:id/valider",
+                "PATCH /api/demandes-paiement/:id/refuser",
+
+                "GET /api/admin/activities",
+
+                "POST /api/inscription",
+                "POST /api/register",
+
+                "POST /api/connexion",
+                "POST /api/login",
+
+                "GET /api/users/:id",
+                "GET /api/users/:id/progression",
+                "GET /api/users/:id/messages",
+                "PATCH /api/users/:userId/messages/:messageId/read",
+                "GET /api/users/:id/certificates",
+                "GET /api/users/:id/certificate-access",
+
+                "GET /api/demandes-paiement",
+                "POST /api/demandes-paiement"
+            ]
+        });
     }
 );
 
@@ -1111,28 +1304,30 @@ app.post(
         try {
 
             const email =
-                clean(req.body.email);
+                clean(
+                    req.body?.email
+                ).toLowerCase();
 
             const password =
                 String(
-                    req.body.password || ""
+                    req.body?.password || ""
                 );
 
 
             if (
-                email !== ADMIN_EMAIL ||
-                password !== ADMIN_PASSWORD
+                email !==
+                ADMIN_EMAIL.toLowerCase() ||
+                password !==
+                ADMIN_PASSWORD
             ) {
 
-                return res.status(401).json({
-
-                    success: false,
-
-                    message:
-                        "Email ou mot de passe administrateur incorrect"
-
-                });
-
+                return res
+                    .status(401)
+                    .json({
+                        success: false,
+                        message:
+                            "Email ou mot de passe administrateur incorrect"
+                    });
             }
 
 
@@ -1143,13 +1338,10 @@ app.post(
             adminTokens.set(
                 tokenHash(token),
                 {
-
                     email:
                         ADMIN_EMAIL,
-
                     loginAt:
                         new Date()
-
                 }
             );
 
@@ -1161,47 +1353,39 @@ app.post(
 
 
             res.json({
-
                 success: true,
 
                 token,
 
                 admin: {
-
                     email:
                         ADMIN_EMAIL
-
                 },
 
                 message:
                     "Connexion administrateur réussie"
-
             });
 
         } catch (error) {
 
             console.error(
-                "Erreur login admin :",
+                "Erreur login admin:",
                 error
             );
 
             res.status(500).json({
-
                 success: false,
-
                 message:
-                    "Erreur interne du serveur"
-
+                    "Erreur serveur"
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   ADMIN SESSION
+   SESSION ADMIN
+   PAS DE SESSION PERSISTANTE
 ============================================================ */
 
 app.get(
@@ -1210,20 +1394,17 @@ app.get(
     (req, res) => {
 
         res.json({
-
             success: true,
 
             admin:
                 req.admin
-
         });
-
     }
 );
 
 
 /* ============================================================
-   ADMIN LOGOUT
+   LOGOUT ADMIN
 ============================================================ */
 
 app.delete(
@@ -1231,34 +1412,458 @@ app.delete(
     adminAuth,
     async (req, res) => {
 
-        const token =
-            getAdminToken(req);
+        try {
 
-
-        if (token) {
+            const hash =
+                tokenHash(
+                    req.adminToken
+                );
 
             adminTokens.delete(
-                tokenHash(token)
+                hash
             );
 
+
+            await logAdminAction(
+                "DECONNEXION_ADMIN",
+                "Déconnexion administrateur"
+            );
+
+
+            res.json({
+                success: true,
+                message:
+                    "Déconnexion réussie"
+            });
+
+        } catch (error) {
+
+            res.status(500).json({
+                success: false,
+                message:
+                    "Erreur déconnexion"
+            });
         }
+    }
+);
 
 
-        await logAdminAction(
-            "DECONNEXION_ADMIN",
-            "Déconnexion administrateur"
+/* ============================================================
+   STATISTIQUES ADMIN
+   VERSION ROBUSTE
+============================================================ */
+
+app.get(
+    "/api/admin/statistiques",
+    adminAuth,
+    async (req, res) => {
+
+        console.log(
+            "[ADMIN STATS] Début récupération statistiques"
         );
 
 
-        res.json({
+        const stats = {
+
+            users: 0,
+            premium: 0,
+            standard: 0,
+            blocked: 0,
+            today: 0,
+
+            payments: 0,
+            pending: 0,
+            validated: 0,
+            refused: 0,
+            revenue: 0,
+
+            messages: 0,
+
+            certificates: 0,
+            certificates_authorized: 0
+        };
+
+
+        /*
+         * Chaque groupe est indépendant.
+         * Une erreur secondaire ne doit pas empêcher
+         * toutes les autres statistiques d'être envoyées.
+         */
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::INTEGER AS users,
+
+                        COUNT(*)
+                        FILTER (
+                            WHERE COALESCE(
+                                is_premium,
+                                FALSE
+                            ) = TRUE
+                        )::INTEGER AS premium,
+
+                        COUNT(*)
+                        FILTER (
+                            WHERE COALESCE(
+                                is_premium,
+                                FALSE
+                            ) = FALSE
+                        )::INTEGER AS standard,
+
+                        COUNT(*)
+                        FILTER (
+                            WHERE COALESCE(
+                                is_blocked,
+                                FALSE
+                            ) = TRUE
+                        )::INTEGER AS blocked,
+
+                        COUNT(*)
+                        FILTER (
+                            WHERE created_at >= CURRENT_DATE
+                        )::INTEGER AS today
+
+                    FROM users
+                    `
+                );
+
+
+            const row =
+                result.rows[0] || {};
+
+
+            stats.users =
+                Number(
+                    row.users || 0
+                );
+
+            stats.premium =
+                Number(
+                    row.premium || 0
+                );
+
+            stats.standard =
+                Number(
+                    row.standard || 0
+                );
+
+            stats.blocked =
+                Number(
+                    row.blocked || 0
+                );
+
+            stats.today =
+                Number(
+                    row.today || 0
+                );
+
+
+        } catch (error) {
+
+            console.error(
+                "[ADMIN STATS] users:",
+                error.message
+            );
+        }
+
+
+        /* =====================================================
+           PAIEMENTS
+        ===================================================== */
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+
+                        COUNT(*)::INTEGER
+                            AS total,
+
+                        COUNT(*)
+                        FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) = 'pending'
+                        )::INTEGER
+                            AS pending,
+
+                        COUNT(*)
+                        FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) IN (
+                                'valide',
+                                'valide',
+                                'validated',
+                                'approved',
+                                'paid'
+                            )
+                        )::INTEGER
+                            AS validated,
+
+                        COUNT(*)
+                        FILTER (
+                            WHERE LOWER(
+                                COALESCE(statut, '')
+                            ) IN (
+                                'refuse',
+                                'refused',
+                                'rejected'
+                            )
+                        )::INTEGER
+                            AS refused,
+
+                        COALESCE(
+                            SUM(
+                                COALESCE(
+                                    montant,
+                                    0
+                                )
+                            )
+                            FILTER (
+                                WHERE LOWER(
+                                    COALESCE(
+                                        statut,
+                                        ''
+                                    )
+                                ) IN (
+                                    'valide',
+                                    'validated',
+                                    'approved',
+                                    'paid'
+                                )
+                            ),
+                            0
+                        ) AS revenue
+
+                    FROM demandes_paiement
+                    `
+                );
+
+
+            const row =
+                result.rows[0] || {};
+
+
+            stats.payments =
+                Number(
+                    row.total || 0
+                );
+
+            stats.pending =
+                Number(
+                    row.pending || 0
+                );
+
+            stats.validated =
+                Number(
+                    row.validated || 0
+                );
+
+            stats.refused =
+                Number(
+                    row.refused || 0
+                );
+
+            stats.revenue =
+                Number(
+                    row.revenue || 0
+                );
+
+
+        } catch (error) {
+
+            console.error(
+                "[ADMIN STATS] payments:",
+                error.message
+            );
+        }
+
+
+        /* =====================================================
+           MESSAGES
+        ===================================================== */
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT COUNT(*)::INTEGER
+                    AS total
+                    FROM messages
+                    `
+                );
+
+
+            stats.messages =
+                Number(
+                    result.rows[0]?.total || 0
+                );
+
+
+        } catch (error) {
+
+            console.error(
+                "[ADMIN STATS] messages:",
+                error.message
+            );
+        }
+
+
+        /* =====================================================
+           CERTIFICATS
+        ===================================================== */
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+
+                        COUNT(*)::INTEGER
+                            AS total,
+
+                        COUNT(*)
+                        FILTER (
+                            WHERE COALESCE(
+                                is_authorized,
+                                FALSE
+                            ) = TRUE
+                        )::INTEGER
+                            AS authorized
+
+                    FROM certificates
+                    `
+                );
+
+
+            stats.certificates =
+                Number(
+                    result.rows[0]?.total || 0
+                );
+
+            stats.certificates_authorized =
+                Number(
+                    result.rows[0]?.authorized || 0
+                );
+
+
+        } catch (error) {
+
+            console.error(
+                "[ADMIN STATS] certificates:",
+                error.message
+            );
+        }
+
+
+        console.log(
+            "[ADMIN STATS] Résultat:",
+            stats
+        );
+
+
+        return res.json({
 
             success: true,
 
+            stats,
+
             message:
-                "Déconnexion réussie"
+                "Statistiques récupérées avec succès",
 
+            generated_at:
+                new Date().toISOString()
         });
+    }
+);
 
+
+/* ============================================================
+   TEST STATISTIQUES
+============================================================ */
+
+app.get(
+    "/api/admin/statistiques/test",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+
+                        (
+                            SELECT COUNT(*)
+                            FROM users
+                        ) AS users,
+
+                        (
+                            SELECT COUNT(*)
+                            FROM demandes_paiement
+                        ) AS payments,
+
+                        (
+                            SELECT COUNT(*)
+                            FROM messages
+                        ) AS messages,
+
+                        (
+                            SELECT COUNT(*)
+                            FROM certificates
+                        ) AS certificates
+                    `
+                );
+
+
+            res.json({
+
+                success: true,
+
+                database: true,
+
+                test:
+                    result.rows[0],
+
+                message:
+                    "Connexion statistiques opérationnelle",
+
+                generated_at:
+                    new Date().toISOString()
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "[ADMIN STATS TEST]",
+                error
+            );
+
+
+            res.status(500).json({
+
+                success: false,
+
+                database: false,
+
+                message:
+                    "Test statistiques échoué",
+
+                error:
+                    error.message
+            });
+        }
     }
 );
 
@@ -1275,7 +1880,9 @@ app.get(
         try {
 
             const search =
-                clean(req.query.search);
+                clean(
+                    req.query.search
+                );
 
 
             let result;
@@ -1308,19 +1915,24 @@ app.get(
                             last_login
                         FROM users
                         WHERE
-                            LOWER(nom)
-                                LIKE LOWER($1)
-                            OR
-                            LOWER(email)
-                                LIKE LOWER($1)
-                            OR
-                            LOWER(COALESCE(telephone, ''))
-                                LIKE LOWER($1)
+                            CAST(id AS TEXT)
+                                ILIKE $1
+
+                            OR nom ILIKE $1
+
+                            OR email ILIKE $1
+
+                            OR telephone ILIKE $1
+
+                            OR domaine ILIKE $1
+
+                            OR pays ILIKE $1
+
+                            OR ville ILIKE $1
+
                         ORDER BY id DESC
                         `,
-                        [
-                            `%${search}%`
-                        ]
+                        [`%${search}%`]
                     );
 
             } else {
@@ -1352,7 +1964,6 @@ app.get(
                         ORDER BY id DESC
                         `
                     );
-
             }
 
 
@@ -1364,34 +1975,37 @@ app.get(
                     result.rows.length,
 
                 users:
-                    result.rows
-
+                    result.rows.map(
+                        publicUser
+                    )
             });
+
 
         } catch (error) {
 
             console.error(
-                "Erreur users :",
+                "Erreur utilisateurs admin:",
                 error
             );
+
 
             res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur base de données"
+                    "Erreur récupération utilisateurs",
 
+                error:
+                    error.message
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   PROFIL COMPLET ADMIN
+   DETAIL UTILISATEUR
 ============================================================ */
 
 app.get(
@@ -1405,6 +2019,19 @@ app.get(
                 Number(
                     req.params.id
                 );
+
+
+            if (
+                !Number.isInteger(id) ||
+                id <= 0
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Identifiant utilisateur invalide"
+                });
+            }
 
 
             const userResult =
@@ -1443,23 +2070,23 @@ app.get(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
-            const user =
-                userResult.rows[0];
+            const [
+                payments,
+                messages,
+                progress,
+                certificates,
+                activities,
+                notifications
+            ] = await Promise.all([
 
-
-            const payments =
-                await pool.query(
+                pool.query(
                     `
                     SELECT *
                     FROM demandes_paiement
@@ -1467,23 +2094,24 @@ app.get(
                     ORDER BY id DESC
                     `,
                     [id]
-                );
+                ),
 
-
-            const messages =
-                await pool.query(
+                pool.query(
                     `
                     SELECT *
                     FROM messages
-                    WHERE recipient_user_id = $1
-                    ORDER BY id DESC
+                    WHERE
+                        recipient_user_id = $1
+                        OR (
+                            sender_type = 'user'
+                            AND sender_id = $1
+                        )
+                    ORDER BY id ASC
                     `,
                     [id]
-                );
+                ),
 
-
-            const progress =
-                await pool.query(
+                pool.query(
                     `
                     SELECT *
                     FROM user_progress
@@ -1491,11 +2119,9 @@ app.get(
                     ORDER BY domaine ASC
                     `,
                     [id]
-                );
+                ),
 
-
-            const certificates =
-                await pool.query(
+                pool.query(
                     `
                     SELECT *
                     FROM certificates
@@ -1503,27 +2129,40 @@ app.get(
                     ORDER BY id DESC
                     `,
                     [id]
-                );
+                ),
 
-
-            const activities =
-                await pool.query(
+                pool.query(
                     `
                     SELECT *
                     FROM user_activity
                     WHERE user_id = $1
                     ORDER BY id DESC
-                    LIMIT 100
+                    LIMIT 200
                     `,
                     [id]
-                );
+                ),
+
+                pool.query(
+                    `
+                    SELECT *
+                    FROM notifications
+                    WHERE user_id = $1
+                    ORDER BY id DESC
+                    LIMIT 200
+                    `,
+                    [id]
+                )
+            ]);
 
 
             res.json({
 
                 success: true,
 
-                user,
+                user:
+                    publicUser(
+                        userResult.rows[0]
+                    ),
 
                 payments:
                     payments.rows,
@@ -1538,28 +2177,32 @@ app.get(
                     certificates.rows,
 
                 activities:
-                    activities.rows
+                    activities.rows,
 
+                notifications:
+                    notifications.rows
             });
+
 
         } catch (error) {
 
             console.error(
-                "Erreur profil :",
+                "Erreur détail utilisateur:",
                 error
             );
+
 
             res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur récupération profil"
+                    "Erreur récupération utilisateur",
 
+                error:
+                    error.message
             });
-
         }
-
     }
 );
 
@@ -1581,18 +2224,71 @@ app.patch(
                 );
 
 
-            const {
-                nom,
-                sexe,
-                email,
-                telephone,
-                domaine,
-                pays,
-                ville,
-                niveau,
-                photo,
-                notes_admin
-            } = req.body;
+            if (
+                !Number.isInteger(id) ||
+                id <= 0
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Identifiant invalide"
+                });
+            }
+
+
+            const body =
+                req.body || {};
+
+
+            const fields = {
+
+                nom:
+                    clean(body.nom),
+
+                sexe:
+                    clean(body.sexe),
+
+                email:
+                    clean(body.email)
+                        .toLowerCase(),
+
+                telephone:
+                    clean(body.telephone),
+
+                domaine:
+                    clean(body.domaine),
+
+                pays:
+                    clean(body.pays),
+
+                ville:
+                    clean(body.ville),
+
+                niveau:
+                    clean(body.niveau),
+
+                photo:
+                    clean(body.photo),
+
+                notes_admin:
+                    clean(body.notes_admin)
+            };
+
+
+            if (
+                !fields.email ||
+                !isValidEmail(
+                    fields.email
+                )
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Adresse email invalide"
+                });
+            }
 
 
             const result =
@@ -1600,39 +2296,18 @@ app.patch(
                     `
                     UPDATE users
                     SET
-                        nom =
-                            COALESCE($1, nom),
-
-                        sexe =
-                            COALESCE($2, sexe),
-
-                        email =
-                            COALESCE($3, email),
-
-                        telephone =
-                            COALESCE($4, telephone),
-
-                        domaine =
-                            COALESCE($5, domaine),
-
-                        pays =
-                            COALESCE($6, pays),
-
-                        ville =
-                            COALESCE($7, ville),
-
-                        niveau =
-                            COALESCE($8, niveau),
-
-                        photo =
-                            COALESCE($9, photo),
-
-                        notes_admin =
-                            COALESCE($10, notes_admin),
-
+                        nom = $1,
+                        sexe = $2,
+                        email = $3,
+                        telephone = $4,
+                        domaine = $5,
+                        pays = $6,
+                        ville = $7,
+                        niveau = $8,
+                        photo = $9,
+                        notes_admin = $10,
                         updated_at =
                             CURRENT_TIMESTAMP
-
                     WHERE id = $11
 
                     RETURNING
@@ -1646,55 +2321,28 @@ app.patch(
                         ville,
                         niveau,
                         photo,
-                        notes_admin,
                         progression,
                         is_premium,
                         is_blocked,
                         certificat_autorise,
                         certificat_obtenu,
-                        premium_until
+                        premium_until,
+                        notes_admin,
+                        created_at,
+                        updated_at,
+                        last_login
                     `,
                     [
-                        nom !== undefined
-                            ? clean(nom)
-                            : null,
-
-                        sexe !== undefined
-                            ? clean(sexe)
-                            : null,
-
-                        email !== undefined
-                            ? clean(email)
-                            : null,
-
-                        telephone !== undefined
-                            ? clean(telephone)
-                            : null,
-
-                        domaine !== undefined
-                            ? clean(domaine)
-                            : null,
-
-                        pays !== undefined
-                            ? clean(pays)
-                            : null,
-
-                        ville !== undefined
-                            ? clean(ville)
-                            : null,
-
-                        niveau !== undefined
-                            ? clean(niveau)
-                            : null,
-
-                        photo !== undefined
-                            ? clean(photo)
-                            : null,
-
-                        notes_admin !== undefined
-                            ? String(notes_admin)
-                            : null,
-
+                        fields.nom,
+                        fields.sexe,
+                        fields.email,
+                        fields.telephone,
+                        fields.domaine,
+                        fields.pays,
+                        fields.ville,
+                        fields.niveau,
+                        fields.photo,
+                        fields.notes_admin,
                         id
                     ]
                 );
@@ -1705,39 +2353,16 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
-
-
-            await pool.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                ($1, $2, $3)
-                `,
-                [
-                    id,
-                    "MODIFICATION_PROFIL",
-                    "Profil modifié par l'administration"
-                ]
-            );
 
 
             await logAdminAction(
                 "MODIFICATION_UTILISATEUR",
-                `Utilisateur ID ${id}`
+                `Utilisateur ${id} modifié`
             );
 
 
@@ -1750,13 +2375,13 @@ app.patch(
 
                 message:
                     "Utilisateur modifié avec succès"
-
             });
+
 
         } catch (error) {
 
             console.error(
-                "Erreur modification :",
+                "Erreur modification utilisateur:",
                 error
             );
 
@@ -1766,14 +2391,10 @@ app.patch(
             ) {
 
                 return res.status(409).json({
-
                     success: false,
-
                     message:
                         "Cette adresse email est déjà utilisée"
-
                 });
-
             }
 
 
@@ -1782,17 +2403,18 @@ app.patch(
                 success: false,
 
                 message:
-                    "Impossible de modifier l'utilisateur"
+                    "Erreur modification utilisateur",
 
+                error:
+                    error.message
             });
-
         }
-
     }
 );
 
+
 /* ============================================================
-   MODIFIER MOT DE PASSE UTILISATEUR
+   MODIFIER MOT DE PASSE
 ============================================================ */
 
 app.patch(
@@ -1809,8 +2431,21 @@ app.patch(
 
             const password =
                 String(
-                    req.body.password || ""
+                    req.body?.password || ""
                 );
+
+
+            if (
+                !Number.isInteger(id) ||
+                id <= 0
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Identifiant invalide"
+                });
+            }
 
 
             if (
@@ -1818,14 +2453,10 @@ app.patch(
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Le mot de passe doit contenir au moins 6 caractères"
-
                 });
-
             }
 
 
@@ -1841,7 +2472,9 @@ app.patch(
                     RETURNING id
                     `,
                     [
-                        hashPassword(password),
+                        hashPassword(
+                            password
+                        ),
                         id
                     ]
                 );
@@ -1852,53 +2485,42 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
             await logAdminAction(
                 "MODIFICATION_MOT_DE_PASSE",
-                `Utilisateur ID ${id}`
+                `Utilisateur ${id}`
             );
 
 
             res.json({
-
                 success: true,
-
                 message:
-                    "Mot de passe modifié avec succès"
-
+                    "Mot de passe modifié"
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
                     "Erreur modification mot de passe"
-
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   BLOQUER UTILISATEUR
+   BLOQUER
 ============================================================ */
 
 app.patch(
@@ -1923,11 +2545,8 @@ app.patch(
                         updated_at =
                             CURRENT_TIMESTAMP
                     WHERE id = $1
-                    RETURNING
-                        id,
-                        nom,
-                        email,
-                        is_blocked
+
+                    RETURNING id
                     `,
                     [id]
                 );
@@ -1938,75 +2557,42 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
-
-
-            await pool.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                ($1, $2, $3)
-                `,
-                [
-                    id,
-                    "COMPTE_BLOQUE",
-                    "Compte bloqué par l'administration"
-                ]
-            );
 
 
             await logAdminAction(
                 "BLOCAGE_UTILISATEUR",
-                `Utilisateur ID ${id}`
+                `Utilisateur ${id}`
             );
 
 
             res.json({
-
                 success: true,
-
-                user:
-                    result.rows[0],
-
                 message:
-                    "Utilisateur bloqué avec succès"
-
+                    "Utilisateur bloqué"
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
                     "Erreur blocage utilisateur"
-
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   DÉBLOQUER UTILISATEUR
+   DÉBLOQUER
 ============================================================ */
 
 app.patch(
@@ -2031,11 +2617,8 @@ app.patch(
                         updated_at =
                             CURRENT_TIMESTAMP
                     WHERE id = $1
-                    RETURNING
-                        id,
-                        nom,
-                        email,
-                        is_blocked
+
+                    RETURNING id
                     `,
                     [id]
                 );
@@ -2046,515 +2629,40 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
-
-
-            await pool.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                ($1, $2, $3)
-                `,
-                [
-                    id,
-                    "COMPTE_DEBLOQUE",
-                    "Compte débloqué par l'administration"
-                ]
-            );
 
 
             await logAdminAction(
                 "DEBLOCAGE_UTILISATEUR",
-                `Utilisateur ID ${id}`
+                `Utilisateur ${id}`
             );
 
 
             res.json({
-
                 success: true,
-
-                user:
-                    result.rows[0],
-
                 message:
-                    "Utilisateur débloqué avec succès"
-
+                    "Utilisateur débloqué"
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
                     "Erreur déblocage utilisateur"
-
             });
-
         }
-
-    }
-);
-
-/* ============================================================
-   STATISTIQUES ADMIN — VERSION STABLE
-============================================================ */
-
-app.get(
-    "/api/admin/statistiques",
-    adminAuth,
-    async (req, res) => {
-
-        console.log(
-            "================================================"
-        );
-
-        console.log(
-            "[ADMIN STATISTIQUES] Requête reçue"
-        );
-
-        console.log(
-            "[ADMIN STATISTIQUES] Admin :",
-            req.admin?.email || "inconnu"
-        );
-
-        try {
-
-            /* ====================================================
-               1. UTILISATEURS
-            ==================================================== */
-
-            const usersQuery = await pool.query(`
-                SELECT
-
-                    COUNT(*)::INTEGER AS users,
-
-                    COUNT(*) FILTER (
-                        WHERE COALESCE(is_premium, FALSE) = TRUE
-                    )::INTEGER AS premium,
-
-                    COUNT(*) FILTER (
-                        WHERE COALESCE(is_premium, FALSE) = FALSE
-                    )::INTEGER AS standard,
-
-                    COUNT(*) FILTER (
-                        WHERE COALESCE(is_blocked, FALSE) = TRUE
-                    )::INTEGER AS blocked,
-
-                    COUNT(*) FILTER (
-                        WHERE created_at >= CURRENT_DATE
-                    )::INTEGER AS today
-
-                FROM users
-            `);
-
-            const userStats =
-                usersQuery.rows[0] || {};
-
-            console.log(
-                "[ADMIN STATISTIQUES] Utilisateurs OK :",
-                userStats
-            );
-
-
-            /* ====================================================
-               2. PAIEMENTS
-            ==================================================== */
-
-            const paymentsQuery = await pool.query(`
-                SELECT
-
-                    COUNT(*)::INTEGER AS payments,
-
-                    COUNT(*) FILTER (
-                        WHERE LOWER(
-                            TRIM(
-                                COALESCE(statut, '')
-                            )
-                        ) IN (
-                            'pending',
-                            'en attente',
-                            'attente'
-                        )
-                    )::INTEGER AS pending,
-
-                    COUNT(*) FILTER (
-                        WHERE LOWER(
-                            TRIM(
-                                COALESCE(statut, '')
-                            )
-                        ) IN (
-                            'validated',
-                            'valide',
-                            'validé',
-                            'approved',
-                            'approve',
-                            'approuve',
-                            'approuvé',
-                            'paid',
-                            'success'
-                        )
-                    )::INTEGER AS validated,
-
-                    COUNT(*) FILTER (
-                        WHERE LOWER(
-                            TRIM(
-                                COALESCE(statut, '')
-                            )
-                        ) IN (
-                            'refused',
-                            'refuse',
-                            'refusé',
-                            'rejected',
-                            'reject',
-                            'cancelled',
-                            'canceled'
-                        )
-                    )::INTEGER AS refused,
-
-                    COALESCE(
-                        SUM(
-                            COALESCE(montant, 0)
-                        ) FILTER (
-                            WHERE LOWER(
-                                TRIM(
-                                    COALESCE(statut, '')
-                                )
-                            ) IN (
-                                'validated',
-                                'valide',
-                                'validé',
-                                'approved',
-                                'approve',
-                                'approuve',
-                                'approuvé',
-                                'paid',
-                                'success'
-                            )
-                        ),
-                        0
-                    )::NUMERIC AS revenue
-
-                FROM demandes_paiement
-            `);
-
-            const paymentStats =
-                paymentsQuery.rows[0] || {};
-
-            console.log(
-                "[ADMIN STATISTIQUES] Paiements OK :",
-                paymentStats
-            );
-
-
-            /* ====================================================
-               3. MESSAGES
-            ==================================================== */
-
-            const messagesQuery = await pool.query(`
-                SELECT
-                    COUNT(*)::INTEGER AS messages
-                FROM messages
-            `);
-
-            const messageStats =
-                messagesQuery.rows[0] || {};
-
-            console.log(
-                "[ADMIN STATISTIQUES] Messages OK :",
-                messageStats
-            );
-
-
-            /* ====================================================
-               4. CERTIFICATS
-            ==================================================== */
-
-            const certificatesQuery = await pool.query(`
-                SELECT
-
-                    COUNT(*)::INTEGER AS certificates,
-
-                    COUNT(*) FILTER (
-                        WHERE COALESCE(
-                            is_authorized,
-                            FALSE
-                        ) = TRUE
-                    )::INTEGER AS certificates_authorized
-
-                FROM certificates
-            `);
-
-            const certificateStats =
-                certificatesQuery.rows[0] || {};
-
-            console.log(
-                "[ADMIN STATISTIQUES] Certificats OK :",
-                certificateStats
-            );
-
-
-            /* ====================================================
-               5. CONSTRUCTION OBJET FINAL
-            ==================================================== */
-
-            const stats = {
-
-                users:
-                    Number(
-                        userStats.users || 0
-                    ),
-
-                premium:
-                    Number(
-                        userStats.premium || 0
-                    ),
-
-                standard:
-                    Number(
-                        userStats.standard || 0
-                    ),
-
-                blocked:
-                    Number(
-                        userStats.blocked || 0
-                    ),
-
-                today:
-                    Number(
-                        userStats.today || 0
-                    ),
-
-
-                payments:
-                    Number(
-                        paymentStats.payments || 0
-                    ),
-
-                pending:
-                    Number(
-                        paymentStats.pending || 0
-                    ),
-
-                validated:
-                    Number(
-                        paymentStats.validated || 0
-                    ),
-
-                refused:
-                    Number(
-                        paymentStats.refused || 0
-                    ),
-
-                revenue:
-                    Number(
-                        paymentStats.revenue || 0
-                    ),
-
-
-                messages:
-                    Number(
-                        messageStats.messages || 0
-                    ),
-
-
-                certificates:
-                    Number(
-                        certificateStats.certificates || 0
-                    ),
-
-                certificates_authorized:
-                    Number(
-                        certificateStats
-                            .certificates_authorized || 0
-                    )
-
-            };
-
-
-            /* ====================================================
-               6. LOG FINAL
-            ==================================================== */
-
-            console.log(
-                "[ADMIN STATISTIQUES] RESULTAT FINAL :"
-            );
-
-            console.log(
-                JSON.stringify(
-                    stats,
-                    null,
-                    2
-                )
-            );
-
-
-            /* ====================================================
-               7. RÉPONSE
-            ==================================================== */
-
-            return res.status(200).json({
-
-                success: true,
-
-                stats,
-
-                message:
-                    "Statistiques récupérées avec succès",
-
-                generated_at:
-                    new Date().toISOString()
-
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                "================================================"
-            );
-
-            console.error(
-                "[ADMIN STATISTIQUES] ERREUR"
-            );
-
-            console.error(
-                "Message :",
-                error.message
-            );
-
-            console.error(
-                "Code PostgreSQL :",
-                error.code || "N/A"
-            );
-
-            console.error(
-                "Detail :",
-                error.detail || "N/A"
-            );
-
-            console.error(
-                "Hint :",
-                error.hint || "N/A"
-            );
-
-            console.error(
-                "================================================"
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Impossible de récupérer les statistiques administrateur",
-
-                error:
-                    error.message || "Erreur inconnue",
-
-                code:
-                    error.code || null
-
-            });
-
-        }
-
     }
 );
 
 
-/* ============================================================
-   TEST STATISTIQUES ADMIN
-============================================================ */
-
-app.get(
-    "/api/admin/statistiques/test",
-    adminAuth,
-    async (req, res) => {
-
-        try {
-
-            const result =
-                await pool.query(`
-                    SELECT
-                        (SELECT COUNT(*) FROM users)
-                            AS users,
-
-                        (SELECT COUNT(*) FROM demandes_paiement)
-                            AS payments,
-
-                        (SELECT COUNT(*) FROM messages)
-                            AS messages,
-
-                        (SELECT COUNT(*) FROM certificates)
-                            AS certificates
-                `);
-
-
-            return res.json({
-
-                success: true,
-
-                database: true,
-
-                test:
-                    result.rows[0],
-
-                message:
-                    "Connexion statistiques opérationnelle",
-
-                generated_at:
-                    new Date().toISOString()
-
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                "[STATISTIQUES TEST] ERREUR :",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                database: false,
-
-                message:
-                    "Le test des statistiques a échoué",
-
-                error:
-                    error.message,
-
-                code:
-                    error.code || null
-
-            });
-
-        }
-
-    }
-);
 /* ============================================================
    ACTIVER PREMIUM
 ============================================================ */
@@ -2571,8 +2679,9 @@ app.patch(
                     req.params.id
                 );
 
-            const premiumUntil =
-                req.body.premium_until ||
+
+            let premiumUntil =
+                req.body?.premium_until ||
                 null;
 
 
@@ -2586,10 +2695,9 @@ app.patch(
                         updated_at =
                             CURRENT_TIMESTAMP
                     WHERE id = $2
+
                     RETURNING
                         id,
-                        nom,
-                        email,
                         is_premium,
                         premium_until
                     `,
@@ -2605,34 +2713,11 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
-
-
-            await pool.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                ($1, $2, $3)
-                `,
-                [
-                    id,
-                    "PREMIUM_ACTIVE",
-                    "Premium activé par l'administration"
-                ]
-            );
 
 
             await pool.query(
@@ -2647,7 +2732,7 @@ app.patch(
                 VALUES
                 (
                     $1,
-                    'Premium activé',
+                    'Compte Premium activé',
                     'Votre compte BMJ SERVICE est maintenant Premium.',
                     'premium'
                 )
@@ -2658,7 +2743,7 @@ app.patch(
 
             await logAdminAction(
                 "ACTIVATION_PREMIUM",
-                `Utilisateur ID ${id}`
+                `Utilisateur ${id}`
             );
 
 
@@ -2670,31 +2755,26 @@ app.patch(
                     result.rows[0],
 
                 message:
-                    "Premium activé avec succès"
-
+                    "Compte Premium activé"
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
                     "Erreur activation Premium"
-
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   DÉSACTIVER PREMIUM
+   RETIRER PREMIUM
 ============================================================ */
 
 app.patch(
@@ -2720,12 +2800,8 @@ app.patch(
                         updated_at =
                             CURRENT_TIMESTAMP
                     WHERE id = $1
-                    RETURNING
-                        id,
-                        nom,
-                        email,
-                        is_premium,
-                        premium_until
+
+                    RETURNING id
                     `,
                     [id]
                 );
@@ -2736,34 +2812,11 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
-
-
-            await pool.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                ($1, $2, $3)
-                `,
-                [
-                    id,
-                    "PREMIUM_DESACTIVE",
-                    "Premium désactivé par l'administration"
-                ]
-            );
 
 
             await pool.query(
@@ -2778,9 +2831,9 @@ app.patch(
                 VALUES
                 (
                     $1,
-                    'Premium désactivé',
-                    'Votre accès Premium a été désactivé par l’administration.',
-                    'premium'
+                    'Compte Premium retiré',
+                    'Votre compte est redevenu Standard.',
+                    'info'
                 )
                 `,
                 [id]
@@ -2788,38 +2841,28 @@ app.patch(
 
 
             await logAdminAction(
-                "DESACTIVATION_PREMIUM",
-                `Utilisateur ID ${id}`
+                "RETRAIT_PREMIUM",
+                `Utilisateur ${id}`
             );
 
 
             res.json({
-
                 success: true,
-
-                user:
-                    result.rows[0],
-
                 message:
-                    "Premium désactivé avec succès"
-
+                    "Premium retiré"
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
-                    "Erreur désactivation Premium"
-
+                    "Erreur retrait Premium"
             });
-
         }
-
     }
 );
 
@@ -2843,7 +2886,7 @@ app.patch(
 
             const progression =
                 clampProgress(
-                    req.body.progression
+                    req.body?.progression
                 );
 
 
@@ -2856,9 +2899,9 @@ app.patch(
                         updated_at =
                             CURRENT_TIMESTAMP
                     WHERE id = $2
+
                     RETURNING
                         id,
-                        nom,
                         progression
                     `,
                     [
@@ -2873,34 +2916,11 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
-
-
-            await pool.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                ($1, $2, $3)
-                `,
-                [
-                    id,
-                    "PROGRESSION_MODIFIEE",
-                    `Progression : ${progression}%`
-                ]
-            );
 
 
             await logAdminAction(
@@ -2918,24 +2938,19 @@ app.patch(
 
                 message:
                     "Progression mise à jour"
-
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
                     "Erreur progression"
-
             });
-
         }
-
     }
 );
 
@@ -2958,44 +2973,43 @@ app.patch(
 
             const domaine =
                 clean(
-                    req.body.domaine
+                    req.body?.domaine
                 );
 
             const progression =
                 clampProgress(
-                    req.body.progression
+                    req.body?.progression
                 );
 
             const chapitreActuel =
-                Math.max(
-                    0,
-                    safeNumber(
-                        req.body.chapitre_actuel,
-                        0
-                    )
+                safeNumber(
+                    req.body?.chapitre_actuel,
+                    0
                 );
 
             const chapitreTotal =
-                Math.max(
-                    0,
-                    safeNumber(
-                        req.body.chapitre_total,
-                        0
-                    )
+                safeNumber(
+                    req.body?.chapitre_total,
+                    0
                 );
 
+            const statut =
+                progression >= 100
+                    ? "termine"
+                    : "en_cours";
 
-            if (!domaine) {
+
+            if (
+                !Number.isInteger(userId) ||
+                userId <= 0 ||
+                !domaine
+            ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
-                        "Le domaine est requis"
-
+                        "Utilisateur ou domaine invalide"
                 });
-
             }
 
 
@@ -3054,17 +3068,9 @@ app.patch(
                         progression,
                         chapitreActuel,
                         chapitreTotal,
-                        progression >= 100
-                            ? "termine"
-                            : "en_cours"
+                        statut
                     ]
                 );
-
-
-            await logAdminAction(
-                "PROGRESSION_DOMAINE",
-                `Utilisateur ${userId} - ${domaine}`
-            );
 
 
             res.json({
@@ -3072,31 +3078,29 @@ app.patch(
                 success: true,
 
                 progress:
-                    result.rows[0]
+                    result.rows[0],
 
+                message:
+                    "Progression du domaine mise à jour"
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
                     "Erreur progression domaine"
-
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   AUTORISATION CERTIFICAT
+   AUTORISER CERTIFICAT
 ============================================================ */
 
 app.patch(
@@ -3111,9 +3115,10 @@ app.patch(
                     req.params.id
                 );
 
-            const autorise =
+            const allowed =
                 booleanValue(
-                    req.body.autorise
+                    req.body?.certificat_autorise ??
+                    req.body?.allowed
                 );
 
 
@@ -3126,15 +3131,14 @@ app.patch(
                         updated_at =
                             CURRENT_TIMESTAMP
                     WHERE id = $2
+
                     RETURNING
                         id,
-                        nom,
-                        email,
                         certificat_autorise,
                         certificat_obtenu
                     `,
                     [
-                        autorise,
+                        allowed,
                         id
                     ]
                 );
@@ -3145,22 +3149,16 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
             await logAdminAction(
-                autorise
-                    ? "CERTIFICAT_AUTORISE"
-                    : "CERTIFICAT_RETIRE",
-                `Utilisateur ID ${id}`
+                "AUTORISATION_CERTIFICAT",
+                `Utilisateur ${id}: ${allowed}`
             );
 
 
@@ -3172,33 +3170,28 @@ app.patch(
                     result.rows[0],
 
                 message:
-                    autorise
-                        ? "Téléchargement du certificat autorisé"
-                        : "Autorisation de certificat retirée"
-
+                    allowed
+                        ? "Certificat autorisé"
+                        : "Autorisation certificat retirée"
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
                     "Erreur autorisation certificat"
-
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   MARQUER CERTIFICAT OBTENU
+   CERTIFICAT OBTENU
 ============================================================ */
 
 app.patch(
@@ -3223,6 +3216,7 @@ app.patch(
                         updated_at =
                             CURRENT_TIMESTAMP
                     WHERE id = $1
+
                     RETURNING
                         id,
                         certificat_autorise,
@@ -3237,21 +3231,11 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
-
-
-            await logAdminAction(
-                "CERTIFICAT_OBTENU",
-                `Utilisateur ID ${id}`
-            );
 
 
             res.json({
@@ -3259,25 +3243,23 @@ app.patch(
                 success: true,
 
                 user:
-                    result.rows[0]
+                    result.rows[0],
 
+                message:
+                    "Certificat marqué comme obtenu"
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
                     "Erreur certificat"
-
             });
-
         }
-
     }
 );
 
@@ -3291,47 +3273,83 @@ app.post(
     adminAuth,
     async (req, res) => {
 
+        const client =
+            await pool.connect();
+
         try {
 
-            const {
-                user_id,
-                domaine,
-                titre,
-                certificat_url
-            } = req.body;
-
-
             const userId =
-                Number(user_id);
+                Number(
+                    req.body?.user_id
+                );
+
+            const domaine =
+                clean(
+                    req.body?.domaine
+                );
+
+            const titre =
+                clean(
+                    req.body?.titre
+                );
+
+            const certificatUrl =
+                clean(
+                    req.body?.certificat_url
+                );
 
 
             if (
-                !userId ||
-                !domaine
+                !Number.isInteger(userId) ||
+                userId <= 0
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
-                        "user_id et domaine sont requis"
-
+                        "Utilisateur invalide"
                 });
+            }
 
+
+            const userResult =
+                await client.query(
+                    `
+                    SELECT id
+                    FROM users
+                    WHERE id = $1
+                    `,
+                    [userId]
+                );
+
+
+            if (
+                userResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+                    success: false,
+                    message:
+                        "Utilisateur introuvable"
+                });
             }
 
 
             const code =
                 "BMJ-CERT-" +
                 crypto
-                    .randomBytes(6)
+                    .randomBytes(8)
                     .toString("hex")
                     .toUpperCase();
 
 
-            const result =
-                await pool.query(
+            await client.query(
+                "BEGIN"
+            );
+
+
+            const certificate =
+                await client.query(
                     `
                     INSERT INTO certificates
                     (
@@ -3340,25 +3358,32 @@ app.post(
                         titre,
                         certificat_url,
                         certificate_code,
-                        is_authorized
+                        is_authorized,
+                        downloaded
                     )
                     VALUES
-                    ($1, $2, $3, $4, $5, TRUE)
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        $5,
+                        TRUE,
+                        FALSE
+                    )
                     RETURNING *
                     `,
                     [
                         userId,
                         domaine,
-                        titre ||
-                            "Certificat BMJ SERVICE",
-                        certificat_url ||
-                            "",
+                        titre,
+                        certificatUrl,
                         code
                     ]
                 );
 
 
-            await pool.query(
+            await client.query(
                 `
                 UPDATE users
                 SET
@@ -3372,45 +3397,84 @@ app.post(
             );
 
 
-            await logAdminAction(
-                "CERTIFICAT_CREE",
-                `Utilisateur ${userId} - ${domaine}`
+            await client.query(
+                `
+                INSERT INTO notifications
+                (
+                    user_id,
+                    title,
+                    message,
+                    type
+                )
+                VALUES
+                (
+                    $1,
+                    'Certificat disponible',
+                    'Votre certificat BMJ SERVICE est maintenant disponible.',
+                    'certificate'
+                )
+                `,
+                [userId]
             );
 
 
-            res.json({
+            await client.query(
+                "COMMIT"
+            );
+
+
+            await logAdminAction(
+                "CREATION_CERTIFICAT",
+                `Certificat ${code} pour utilisateur ${userId}`
+            );
+
+
+            res.status(201).json({
 
                 success: true,
 
                 certificate:
-                    result.rows[0],
+                    certificate.rows[0],
 
                 message:
                     "Certificat créé avec succès"
-
             });
+
 
         } catch (error) {
 
+            try {
+                await client.query(
+                    "ROLLBACK"
+                );
+            } catch (_) {}
+
+
             console.error(error);
+
 
             res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur création certificat"
+                    "Erreur création certificat",
 
+                error:
+                    error.message
             });
 
-        }
 
+        } finally {
+
+            client.release();
+        }
     }
 );
 
 
 /* ============================================================
-   LISTE CERTIFICATS ADMIN
+   CERTIFICATS ADMIN UTILISATEUR
 ============================================================ */
 
 app.get(
@@ -3424,6 +3488,19 @@ app.get(
                 Number(
                     req.params.id
                 );
+
+
+            if (
+                !Number.isInteger(userId) ||
+                userId <= 0
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Identifiant utilisateur invalide"
+                });
+            }
 
 
             const result =
@@ -3444,8 +3521,8 @@ app.get(
 
                 certificates:
                     result.rows
-
             });
+
 
         } catch (error) {
 
@@ -3457,77 +3534,53 @@ app.get(
 
                 message:
                     "Erreur certificats"
-
             });
-
         }
-
     }
 );
 
-/* ============================================================
-   SYSTÈME COMPLET DE MESSAGES ADMIN
-   BMJ SERVICE
-============================================================ */
-
 
 /* ============================================================
-   OUTILS MESSAGES
+   MESSAGES — UTILITAIRES
 ============================================================ */
 
-function normalizeMessagePriority(priority) {
+async function createNotification(
+    client,
+    userId,
+    title,
+    message,
+    type = "info"
+) {
 
-    const allowedPriorities = [
-        "normal",
-        "important",
-        "urgent"
-    ];
-
-    const value =
-        String(priority || "")
-            .trim()
-            .toLowerCase();
-
-    if (allowedPriorities.includes(value)) {
-        return value;
-    }
-
-    return "normal";
+    await client.query(
+        `
+        INSERT INTO notifications
+        (
+            user_id,
+            title,
+            message,
+            type
+        )
+        VALUES
+        (
+            $1,
+            $2,
+            $3,
+            $4
+        )
+        `,
+        [
+            userId,
+            title,
+            message,
+            type
+        ]
+    );
 }
 
 
 /* ============================================================
-   NETTOYER LE SUJET
-============================================================ */
-
-function normalizeMessageSubject(subject) {
-
-    const value =
-        String(subject || "")
-            .trim();
-
-    if (!value) {
-        return "Message BMJ SERVICE";
-    }
-
-    return value.substring(0, 200);
-}
-
-
-/* ============================================================
-   NETTOYER LE CONTENU
-============================================================ */
-
-function normalizeMessageContent(message) {
-
-    return String(message || "")
-        .trim();
-
-}
-
-
-/* ============================================================
-   ENVOYER MESSAGE À UN UTILISATEUR
+   MESSAGE UTILISATEUR
 ============================================================ */
 
 app.post(
@@ -3540,39 +3593,26 @@ app.post(
 
         try {
 
-            const {
-                user_id,
-                subject,
-                message,
-                priority
-            } = req.body || {};
-
-
             const userId =
-                Number(user_id);
+                Number(
+                    req.body?.user_id
+                );
 
-
-            const cleanSubject =
+            const subject =
                 normalizeMessageSubject(
-                    subject
+                    req.body?.subject
                 );
 
-
-            const cleanMessage =
+            const message =
                 normalizeMessageContent(
-                    message
+                    req.body?.message
                 );
 
-
-            const cleanPriority =
+            const priority =
                 normalizeMessagePriority(
-                    priority
+                    req.body?.priority
                 );
 
-
-            /* ----------------------------------------------------
-               VALIDATION
-            ---------------------------------------------------- */
 
             if (
                 !Number.isInteger(userId) ||
@@ -3580,34 +3620,22 @@ app.post(
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Utilisateur invalide"
-
                 });
-
             }
 
 
-            if (!cleanMessage) {
+            if (!message) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Le message est requis"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               VÉRIFIER L'UTILISATEUR
-            ---------------------------------------------------- */
 
             const userResult =
                 await client.query(
@@ -3620,7 +3648,6 @@ app.post(
                         is_blocked
                     FROM users
                     WHERE id = $1
-                    LIMIT 1
                     `,
                     [userId]
                 );
@@ -3631,55 +3658,32 @@ app.post(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
-            const user =
-                userResult.rows[0];
-
-
-            /* ----------------------------------------------------
-               UTILISATEUR BLOQUÉ
-            ---------------------------------------------------- */
-
             if (
-                user.is_blocked === true
+                userResult.rows[0]
+                    .is_blocked
             ) {
 
                 return res.status(403).json({
-
                     success: false,
-
                     message:
                         "Impossible d'envoyer un message à un utilisateur bloqué"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               TRANSACTION
-            ---------------------------------------------------- */
 
             await client.query(
                 "BEGIN"
             );
 
 
-            /* ----------------------------------------------------
-               ENREGISTRER MESSAGE
-            ---------------------------------------------------- */
-
-            const messageResult =
+            const result =
                 await client.query(
                     `
                     INSERT INTO messages
@@ -3708,136 +3712,82 @@ app.post(
                     `,
                     [
                         userId,
-                        cleanSubject,
-                        cleanMessage,
-                        cleanPriority
+                        subject,
+                        message,
+                        priority
                     ]
                 );
 
 
-            /* ----------------------------------------------------
-               CRÉER NOTIFICATION
-            ---------------------------------------------------- */
-
-            await client.query(
-                `
-                INSERT INTO notifications
-                (
-                    user_id,
-                    title,
-                    message,
-                    type
-                )
-                VALUES
-                (
-                    $1,
-                    $2,
-                    $3,
-                    $4
-                )
-                `,
-                [
-                    userId,
-                    cleanSubject,
-                    cleanMessage,
-                    cleanPriority
-                ]
+            await createNotification(
+                client,
+                userId,
+                subject,
+                message,
+                priority
             );
 
-
-            /* ----------------------------------------------------
-               VALIDER
-            ---------------------------------------------------- */
 
             await client.query(
                 "COMMIT"
             );
 
 
-            /* ----------------------------------------------------
-               JOURNAL ADMIN
-            ---------------------------------------------------- */
-
-            try {
-
-                await logAdminAction(
-                    "MESSAGE_UTILISATEUR",
-                    `Message envoyé à l'utilisateur ${userId}`
-                );
-
-            } catch (logError) {
-
-                console.error(
-                    "Erreur journal admin :",
-                    logError
-                );
-
-            }
+            await logAdminAction(
+                "MESSAGE_UTILISATEUR",
+                `Message envoyé à l'utilisateur ${userId}`
+            );
 
 
-            /* ----------------------------------------------------
-               RÉPONSE
-            ---------------------------------------------------- */
-
-            return res.status(201).json({
+            res.status(201).json({
 
                 success: true,
 
                 messageData:
-                    messageResult.rows[0],
+                    result.rows[0],
 
                 message:
                     "Message envoyé avec succès"
-
             });
 
 
         } catch (error) {
 
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
-            } catch (rollbackError) {
-
-                console.error(
-                    "Erreur rollback :",
-                    rollbackError
-                );
-
-            }
+            } catch (_) {}
 
 
             console.error(
-                "Erreur message utilisateur :",
+                "Erreur message utilisateur:",
                 error
             );
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur lors de l'envoi du message"
+                    "Erreur lors de l'envoi du message",
 
+                error:
+                    error.message
             });
 
 
         } finally {
 
             client.release();
-
         }
-
     }
 );
 
 
 /* ============================================================
-   ENVOYER MESSAGE À TOUS
+   MESSAGE À TOUS
 ============================================================ */
 
 app.post(
@@ -3850,61 +3800,42 @@ app.post(
 
         try {
 
-            const {
-                subject,
-                message,
-                priority
-            } = req.body || {};
-
-
-            const cleanSubject =
+            const subject =
                 normalizeMessageSubject(
-                    subject
+                    req.body?.subject
                 );
 
-
-            const cleanMessage =
+            const message =
                 normalizeMessageContent(
-                    message
+                    req.body?.message
                 );
 
-
-            const cleanPriority =
+            const priority =
                 normalizeMessagePriority(
-                    priority
+                    req.body?.priority
                 );
 
 
-            /* ----------------------------------------------------
-               VALIDATION
-            ---------------------------------------------------- */
-
-            if (!cleanMessage) {
+            if (!message) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Le message est requis"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               RÉCUPÉRER UTILISATEURS
-            ---------------------------------------------------- */
 
             const users =
                 await client.query(
                     `
-                    SELECT
-                        id
+                    SELECT id
                     FROM users
                     WHERE
-                        COALESCE(is_blocked, FALSE) = FALSE
+                        COALESCE(
+                            is_blocked,
+                            FALSE
+                        ) = FALSE
                     ORDER BY id ASC
                     `
                 );
@@ -3915,22 +3846,13 @@ app.post(
             ) {
 
                 return res.json({
-
                     success: true,
-
                     count: 0,
-
                     message:
                         "Aucun utilisateur disponible"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               TRANSACTION
-            ---------------------------------------------------- */
 
             await client.query(
                 "BEGIN"
@@ -3939,10 +3861,6 @@ app.post(
 
             let count = 0;
 
-
-            /* ----------------------------------------------------
-               ENVOYER À CHAQUE UTILISATEUR
-            ---------------------------------------------------- */
 
             for (
                 const user
@@ -3976,79 +3894,38 @@ app.post(
                     `,
                     [
                         user.id,
-                        cleanSubject,
-                        cleanMessage,
-                        cleanPriority
+                        subject,
+                        message,
+                        priority
                     ]
                 );
 
 
-                /* ------------------------------------------------
-                   NOTIFICATION
-                ------------------------------------------------ */
-
-                await client.query(
-                    `
-                    INSERT INTO notifications
-                    (
-                        user_id,
-                        title,
-                        message,
-                        type
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4
-                    )
-                    `,
-                    [
-                        user.id,
-                        cleanSubject,
-                        cleanMessage,
-                        cleanPriority
-                    ]
+                await createNotification(
+                    client,
+                    user.id,
+                    subject,
+                    message,
+                    priority
                 );
 
 
                 count++;
-
             }
 
-
-            /* ----------------------------------------------------
-               COMMIT
-            ---------------------------------------------------- */
 
             await client.query(
                 "COMMIT"
             );
 
 
-            /* ----------------------------------------------------
-               JOURNAL
-            ---------------------------------------------------- */
-
-            try {
-
-                await logAdminAction(
-                    "MESSAGE_GLOBAL",
-                    `Message envoyé à ${count} utilisateurs`
-                );
-
-            } catch (logError) {
-
-                console.error(
-                    "Erreur journal admin :",
-                    logError
-                );
-
-            }
+            await logAdminAction(
+                "MESSAGE_GLOBAL",
+                `${count} utilisateurs`
+            );
 
 
-            return res.status(201).json({
+            res.status(201).json({
 
                 success: true,
 
@@ -4056,50 +3933,40 @@ app.post(
 
                 message:
                     `Message envoyé à ${count} utilisateurs`
-
             });
 
 
         } catch (error) {
 
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
-            } catch (rollbackError) {
-
-                console.error(
-                    "Erreur rollback :",
-                    rollbackError
-                );
-
-            }
+            } catch (_) {}
 
 
             console.error(
-                "Erreur message global :",
+                "Erreur message global:",
                 error
             );
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur lors de l'envoi global"
+                    "Erreur lors de l'envoi global",
 
+                error:
+                    error.message
             });
 
 
         } finally {
 
             client.release();
-
         }
-
     }
 );
 
@@ -4118,63 +3985,49 @@ app.post(
 
         try {
 
-            const {
-                subject,
-                message,
-                priority
-            } = req.body || {};
-
-
-            const cleanSubject =
+            const subject =
                 normalizeMessageSubject(
-                    subject ||
+                    req.body?.subject ||
                     "Message Premium"
                 );
 
-
-            const cleanMessage =
+            const message =
                 normalizeMessageContent(
-                    message
+                    req.body?.message
                 );
 
-
-            const cleanPriority =
+            const priority =
                 normalizeMessagePriority(
-                    priority
+                    req.body?.priority
                 );
 
 
-            /* ----------------------------------------------------
-               VALIDATION
-            ---------------------------------------------------- */
-
-            if (!cleanMessage) {
+            if (!message) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Le message est requis"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               UTILISATEURS PREMIUM
-            ---------------------------------------------------- */
 
             const users =
                 await client.query(
                     `
-                    SELECT
-                        id
+                    SELECT id
                     FROM users
                     WHERE
-                        COALESCE(is_premium, FALSE) = TRUE
-                        AND COALESCE(is_blocked, FALSE) = FALSE
+                        COALESCE(
+                            is_premium,
+                            FALSE
+                        ) = TRUE
+
+                        AND COALESCE(
+                            is_blocked,
+                            FALSE
+                        ) = FALSE
+
                     ORDER BY id ASC
                     `
                 );
@@ -4185,16 +4038,11 @@ app.post(
             ) {
 
                 return res.json({
-
                     success: true,
-
                     count: 0,
-
                     message:
                         "Aucun utilisateur Premium disponible"
-
                 });
-
             }
 
 
@@ -4205,10 +4053,6 @@ app.post(
 
             let count = 0;
 
-
-            /* ----------------------------------------------------
-               ENVOYER
-            ---------------------------------------------------- */
 
             for (
                 const user
@@ -4242,45 +4086,23 @@ app.post(
                     `,
                     [
                         user.id,
-                        cleanSubject,
-                        cleanMessage,
-                        cleanPriority
+                        subject,
+                        message,
+                        priority
                     ]
                 );
 
 
-                /* ------------------------------------------------
-                   NOTIFICATION PREMIUM
-                ------------------------------------------------ */
-
-                await client.query(
-                    `
-                    INSERT INTO notifications
-                    (
-                        user_id,
-                        title,
-                        message,
-                        type
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4
-                    )
-                    `,
-                    [
-                        user.id,
-                        cleanSubject,
-                        cleanMessage,
-                        cleanPriority
-                    ]
+                await createNotification(
+                    client,
+                    user.id,
+                    subject,
+                    message,
+                    priority
                 );
 
 
                 count++;
-
             }
 
 
@@ -4289,28 +4111,13 @@ app.post(
             );
 
 
-            /* ----------------------------------------------------
-               JOURNAL
-            ---------------------------------------------------- */
-
-            try {
-
-                await logAdminAction(
-                    "MESSAGE_PREMIUM",
-                    `${count} utilisateurs Premium`
-                );
-
-            } catch (logError) {
-
-                console.error(
-                    "Erreur journal admin :",
-                    logError
-                );
-
-            }
+            await logAdminAction(
+                "MESSAGE_PREMIUM",
+                `${count} utilisateurs Premium`
+            );
 
 
-            return res.status(201).json({
+            res.status(201).json({
 
                 success: true,
 
@@ -4318,50 +4125,37 @@ app.post(
 
                 message:
                     `Message envoyé à ${count} Premium`
-
             });
 
 
         } catch (error) {
 
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
-            } catch (rollbackError) {
-
-                console.error(
-                    "Erreur rollback :",
-                    rollbackError
-                );
-
-            }
+            } catch (_) {}
 
 
-            console.error(
-                "Erreur message Premium :",
-                error
-            );
+            console.error(error);
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur lors de l'envoi du message Premium"
+                    "Erreur lors de l'envoi du message Premium",
 
+                error:
+                    error.message
             });
 
 
         } finally {
 
             client.release();
-
         }
-
     }
 );
 
@@ -4380,62 +4174,48 @@ app.post(
 
         try {
 
-            const {
-                subject,
-                message,
-                priority
-            } = req.body || {};
-
-
-            const cleanSubject =
+            const subject =
                 normalizeMessageSubject(
-                    subject
+                    req.body?.subject
                 );
 
-
-            const cleanMessage =
+            const message =
                 normalizeMessageContent(
-                    message
+                    req.body?.message
                 );
 
-
-            const cleanPriority =
+            const priority =
                 normalizeMessagePriority(
-                    priority
+                    req.body?.priority
                 );
 
 
-            /* ----------------------------------------------------
-               VALIDATION
-            ---------------------------------------------------- */
-
-            if (!cleanMessage) {
+            if (!message) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Le message est requis"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               UTILISATEURS STANDARD
-            ---------------------------------------------------- */
 
             const users =
                 await client.query(
                     `
-                    SELECT
-                        id
+                    SELECT id
                     FROM users
                     WHERE
-                        COALESCE(is_premium, FALSE) = FALSE
-                        AND COALESCE(is_blocked, FALSE) = FALSE
+                        COALESCE(
+                            is_premium,
+                            FALSE
+                        ) = FALSE
+
+                        AND COALESCE(
+                            is_blocked,
+                            FALSE
+                        ) = FALSE
+
                     ORDER BY id ASC
                     `
                 );
@@ -4446,16 +4226,11 @@ app.post(
             ) {
 
                 return res.json({
-
                     success: true,
-
                     count: 0,
-
                     message:
                         "Aucun utilisateur Standard disponible"
-
                 });
-
             }
 
 
@@ -4466,10 +4241,6 @@ app.post(
 
             let count = 0;
 
-
-            /* ----------------------------------------------------
-               ENVOYER
-            ---------------------------------------------------- */
 
             for (
                 const user
@@ -4503,45 +4274,23 @@ app.post(
                     `,
                     [
                         user.id,
-                        cleanSubject,
-                        cleanMessage,
-                        cleanPriority
+                        subject,
+                        message,
+                        priority
                     ]
                 );
 
 
-                /* ------------------------------------------------
-                   NOTIFICATION
-                ------------------------------------------------ */
-
-                await client.query(
-                    `
-                    INSERT INTO notifications
-                    (
-                        user_id,
-                        title,
-                        message,
-                        type
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4
-                    )
-                    `,
-                    [
-                        user.id,
-                        cleanSubject,
-                        cleanMessage,
-                        cleanPriority
-                    ]
+                await createNotification(
+                    client,
+                    user.id,
+                    subject,
+                    message,
+                    priority
                 );
 
 
                 count++;
-
             }
 
 
@@ -4550,28 +4299,13 @@ app.post(
             );
 
 
-            /* ----------------------------------------------------
-               JOURNAL
-            ---------------------------------------------------- */
-
-            try {
-
-                await logAdminAction(
-                    "MESSAGE_STANDARD",
-                    `${count} utilisateurs Standard`
-                );
-
-            } catch (logError) {
-
-                console.error(
-                    "Erreur journal admin :",
-                    logError
-                );
-
-            }
+            await logAdminAction(
+                "MESSAGE_STANDARD",
+                `${count} utilisateurs Standard`
+            );
 
 
-            return res.status(201).json({
+            res.status(201).json({
 
                 success: true,
 
@@ -4579,57 +4313,43 @@ app.post(
 
                 message:
                     `Message envoyé à ${count} Standard`
-
             });
 
 
         } catch (error) {
 
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
-            } catch (rollbackError) {
-
-                console.error(
-                    "Erreur rollback :",
-                    rollbackError
-                );
-
-            }
+            } catch (_) {}
 
 
-            console.error(
-                "Erreur message Standard :",
-                error
-            );
+            console.error(error);
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur lors de l'envoi du message Standard"
+                    "Erreur lors de l'envoi du message Standard",
 
+                error:
+                    error.message
             });
 
 
         } finally {
 
             client.release();
-
         }
-
     }
 );
 
 
 /* ============================================================
-   RÉCUPÉRER LES MESSAGES D'UN UTILISATEUR
-   ADMIN
+   CONVERSATION ADMIN
 ============================================================ */
 
 app.get(
@@ -4645,30 +4365,18 @@ app.get(
                 );
 
 
-            /* ----------------------------------------------------
-               VALIDATION
-            ---------------------------------------------------- */
-
             if (
                 !Number.isInteger(userId) ||
                 userId <= 0
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Identifiant utilisateur invalide"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               VÉRIFIER UTILISATEUR
-            ---------------------------------------------------- */
 
             const userResult =
                 await pool.query(
@@ -4681,7 +4389,6 @@ app.get(
                         is_blocked
                     FROM users
                     WHERE id = $1
-                    LIMIT 1
                     `,
                     [userId]
                 );
@@ -4692,20 +4399,12 @@ app.get(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               RÉCUPÉRER LA CONVERSATION
-            ---------------------------------------------------- */
 
             const result =
                 await pool.query(
@@ -4714,22 +4413,33 @@ app.get(
                     FROM messages
                     WHERE
                         recipient_user_id = $1
+
                         OR (
                             sender_type = 'user'
                             AND sender_id = $1
                         )
-                    ORDER BY
-                        id ASC
+
+                        OR (
+                            parent_id IN (
+                                SELECT id
+                                FROM messages
+                                WHERE
+                                    recipient_user_id = $1
+
+                                    OR (
+                                        sender_type = 'user'
+                                        AND sender_id = $1
+                                    )
+                            )
+                        )
+
+                    ORDER BY id ASC
                     `,
                     [userId]
                 );
 
 
-            /* ----------------------------------------------------
-               RÉPONSE
-            ---------------------------------------------------- */
-
-            return res.json({
+            res.json({
 
                 success: true,
 
@@ -4744,29 +4454,28 @@ app.get(
 
                 messages:
                     result.rows
-
             });
 
 
         } catch (error) {
 
             console.error(
-                "Erreur récupération messages :",
+                "Erreur messages admin:",
                 error
             );
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur lors de la récupération des messages"
+                    "Erreur lors de la récupération des messages",
 
+                error:
+                    error.message
             });
-
         }
-
     }
 );
 
@@ -4790,16 +4499,11 @@ app.post(
                     req.params.id
                 );
 
-
-            const cleanMessage =
+            const message =
                 normalizeMessageContent(
                     req.body?.message
                 );
 
-
-            /* ----------------------------------------------------
-               VALIDATION ID
-            ---------------------------------------------------- */
 
             if (
                 !Number.isInteger(messageId) ||
@@ -4807,38 +4511,22 @@ app.post(
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Identifiant du message invalide"
-
                 });
-
             }
 
 
-            /* ----------------------------------------------------
-               VALIDATION MESSAGE
-            ---------------------------------------------------- */
-
-            if (!cleanMessage) {
+            if (!message) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Réponse vide"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               RÉCUPÉRER MESSAGE ORIGINAL
-            ---------------------------------------------------- */
 
             const originalResult =
                 await client.query(
@@ -4857,73 +4545,109 @@ app.post(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Message introuvable"
-
                 });
-
             }
 
 
-            const originalMessage =
+            const original =
                 originalResult.rows[0];
 
 
-                        /* ----------------------------------------------------
-               TROUVER L'UTILISATEUR
-            ---------------------------------------------------- */
+            /*
+             * Message utilisateur :
+             * sender_id = utilisateur
+             */
 
             let userId = null;
 
 
-            /*
-             * CAS 1 :
-             * Le message original vient de l'utilisateur
-             *
-             * Dans ce cas :
-             * sender_id = ID de l'utilisateur
-             */
-
             if (
-                originalMessage.sender_type === "user" &&
-                originalMessage.sender_id
+                original.sender_type === "user" &&
+                original.sender_id
             ) {
 
                 userId =
                     Number(
-                        originalMessage.sender_id
+                        original.sender_id
                     );
-
             }
 
 
             /*
-             * CAS 2 :
-             * Le message original vient de l'administration
-             *
-             * Dans ce cas :
-             * recipient_user_id = ID de l'utilisateur
+             * Message admin :
+             * recipient_user_id = utilisateur
              */
 
             if (
                 !userId &&
-                originalMessage.recipient_user_id
+                original.recipient_user_id
             ) {
 
                 userId =
                     Number(
-                        originalMessage.recipient_user_id
+                        original.recipient_user_id
                     );
-
             }
 
 
-            /* ----------------------------------------------------
-               VÉRIFICATION DE L'UTILISATEUR
-            ---------------------------------------------------- */
+            /*
+             * Si le message est déjà une réponse,
+             * on remonte au message parent.
+             */
+
+            if (
+                !userId &&
+                original.parent_id
+            ) {
+
+                const parentResult =
+                    await client.query(
+                        `
+                        SELECT
+                            sender_id,
+                            recipient_user_id
+                        FROM messages
+                        WHERE id = $1
+                        `,
+                        [
+                            original.parent_id
+                        ]
+                    );
+
+
+                const parent =
+                    parentResult.rows[0];
+
+
+                if (parent) {
+
+                    if (
+                        parent.sender_id
+                    ) {
+
+                        userId =
+                            Number(
+                                parent.sender_id
+                            );
+                    }
+
+
+                    if (
+                        !userId &&
+                        parent.recipient_user_id
+                    ) {
+
+                        userId =
+                            Number(
+                                parent.recipient_user_id
+                            );
+                    }
+                }
+            }
+
 
             if (
                 !Number.isInteger(userId) ||
@@ -4931,20 +4655,12 @@ app.post(
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Impossible de déterminer l'utilisateur de cette conversation"
-
                 });
-
             }
 
-
-            /* ----------------------------------------------------
-               RÉCUPÉRER L'UTILISATEUR
-            ---------------------------------------------------- */
 
             const userResult =
                 await client.query(
@@ -4957,81 +4673,49 @@ app.post(
                         is_blocked
                     FROM users
                     WHERE id = $1
-                    LIMIT 1
                     `,
                     [userId]
                 );
 
-
-            /* ----------------------------------------------------
-               UTILISATEUR INTROUVABLE
-            ---------------------------------------------------- */
 
             if (
                 userResult.rows.length === 0
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
-            const user =
-                userResult.rows[0];
-
-
-            /* ----------------------------------------------------
-               VÉRIFIER SI L'UTILISATEUR EST BLOQUÉ
-            ---------------------------------------------------- */
-
             if (
-                user.is_blocked === true
+                userResult.rows[0]
+                    .is_blocked
             ) {
 
                 return res.status(403).json({
-
                     success: false,
-
                     message:
                         "Impossible de répondre à un utilisateur bloqué"
-
                 });
-
             }
 
 
-            /* ----------------------------------------------------
-               COMMENCER LA TRANSACTION
-            ---------------------------------------------------- */
+            const subject =
+                normalizeMessageSubject(
+                    original.subject ||
+                    "Réponse BMJ SERVICE"
+                );
+
 
             await client.query(
                 "BEGIN"
             );
 
 
-            /* ----------------------------------------------------
-               SUJET DE LA RÉPONSE
-            ---------------------------------------------------- */
-
-            const replySubject =
-                normalizeMessageSubject(
-                    originalMessage.subject ||
-                    "Réponse BMJ SERVICE"
-                );
-
-
-            /* ----------------------------------------------------
-               ENREGISTRER LA RÉPONSE
-            ---------------------------------------------------- */
-
-            const replyResult =
+            const reply =
                 await client.query(
                     `
                     INSERT INTO messages
@@ -5062,149 +4746,82 @@ app.post(
                     `,
                     [
                         userId,
-                        replySubject,
-                        cleanMessage,
+                        subject,
+                        message,
                         messageId
                     ]
                 );
 
 
-            /* ----------------------------------------------------
-               CRÉER LA NOTIFICATION
-            ---------------------------------------------------- */
-
-            await client.query(
-                `
-                INSERT INTO notifications
-                (
-                    user_id,
-                    title,
-                    message,
-                    type
-                )
-                VALUES
-                (
-                    $1,
-                    $2,
-                    $3,
-                    $4
-                )
-                `,
-                [
-                    userId,
-                    replySubject,
-                    cleanMessage,
-                    "normal"
-                ]
+            await createNotification(
+                client,
+                userId,
+                subject,
+                message,
+                "normal"
             );
 
-
-            /* ----------------------------------------------------
-               VALIDER LA TRANSACTION
-            ---------------------------------------------------- */
 
             await client.query(
                 "COMMIT"
             );
 
 
-            /* ----------------------------------------------------
-               JOURNAL ADMIN
-            ---------------------------------------------------- */
-
-            try {
-
-                await logAdminAction(
-                    "REPONSE_MESSAGE",
-                    `Réponse au message ${messageId} envoyée à l'utilisateur ${userId}`
-                );
-
-            } catch (logError) {
-
-                console.error(
-                    "Erreur journal admin :",
-                    logError
-                );
-
-            }
+            await logAdminAction(
+                "REPONSE_MESSAGE",
+                `Réponse ${messageId} envoyée à l'utilisateur ${userId}`
+            );
 
 
-            /* ----------------------------------------------------
-               RÉPONSE AU FRONTEND
-            ---------------------------------------------------- */
-
-            return res.status(201).json({
+            res.status(201).json({
 
                 success: true,
 
                 messageData:
-                    replyResult.rows[0],
+                    reply.rows[0],
 
                 message:
                     "Réponse envoyée avec succès"
-
             });
 
 
         } catch (error) {
 
-
-            /* ----------------------------------------------------
-               ANNULER LA TRANSACTION EN CAS D'ERREUR
-            ---------------------------------------------------- */
-
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
-            } catch (rollbackError) {
-
-                console.error(
-                    "Erreur rollback :",
-                    rollbackError
-                );
-
-            }
+            } catch (_) {}
 
 
             console.error(
-                "Erreur réponse message :",
+                "Erreur réponse message:",
                 error
             );
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur lors de l'envoi de la réponse"
+                    "Erreur lors de l'envoi de la réponse",
 
+                error:
+                    error.message
             });
 
 
         } finally {
 
-
-            /* ----------------------------------------------------
-               LIBÉRER LA CONNEXION
-            ---------------------------------------------------- */
-
             client.release();
-
         }
-
     }
 );
 
 
 /* ============================================================
-   FIN — SYSTÈME DE MESSAGES ADMIN
-============================================================ */
-/* ============================================================
-   NOTIFICATIONS UTILISATEUR - ADMIN
+   NOTIFICATIONS ADMIN
 ============================================================ */
 
 app.get(
@@ -5238,8 +4855,8 @@ app.get(
 
                 notifications:
                     result.rows
-
             });
+
 
         } catch (error) {
 
@@ -5251,11 +4868,8 @@ app.get(
 
                 message:
                     "Erreur notifications"
-
             });
-
         }
-
     }
 );
 
@@ -5298,32 +4912,39 @@ app.get(
 
                 success: true,
 
+                count:
+                    result.rows.length,
+
                 demandes:
                     result.rows
-
             });
+
 
         } catch (error) {
 
-            console.error(error);
+            console.error(
+                "Erreur paiements admin:",
+                error
+            );
+
 
             res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur récupération paiements"
+                    "Erreur récupération paiements",
 
+                error:
+                    error.message
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   DEMANDES PAIEMENT - COMPATIBILITÉ
+   COMPATIBILITÉ DEMANDES PAIEMENT
 ============================================================ */
 
 app.get(
@@ -5348,23 +4969,21 @@ app.get(
 
                 demandes:
                     result.rows
-
             });
+
 
         } catch (error) {
 
             console.error(error);
 
-            res.json({
+            res.status(500).json({
 
-                success: true,
+                success: false,
 
-                demandes: []
-
+                message:
+                    "Erreur récupération paiements"
             });
-
         }
-
     }
 );
 
@@ -5379,35 +4998,50 @@ app.post(
 
         try {
 
-            const {
-                user_id,
-                telephone_paiement,
-                montant,
-                methode,
-                reference_paiement,
-                preuve_paiement
-            } = req.body;
-
-
             const userId =
-                Number(user_id);
+                Number(
+                    req.body?.user_id
+                );
+
+            const telephone =
+                clean(
+                    req.body?.telephone_paiement
+                );
+
+            const montant =
+                Number(
+                    req.body?.montant
+                );
+
+            const methode =
+                clean(
+                    req.body?.methode
+                );
+
+            const reference =
+                clean(
+                    req.body?.reference_paiement
+                );
+
+            const preuve =
+                clean(
+                    req.body?.preuve_paiement
+                );
 
 
             if (
-                !userId ||
-                !montant ||
+                !Number.isInteger(userId) ||
+                userId <= 0 ||
+                !Number.isFinite(montant) ||
+                montant <= 0 ||
                 !methode
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Informations de paiement incomplètes"
-
                 });
-
             }
 
 
@@ -5427,14 +5061,10 @@ app.post(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
@@ -5465,11 +5095,11 @@ app.post(
                     `,
                     [
                         userId,
-                        telephone_paiement || "",
+                        telephone,
                         montant,
                         methode,
-                        reference_paiement || "",
-                        preuve_paiement || ""
+                        reference,
+                        preuve
                     ]
                 );
 
@@ -5483,7 +5113,11 @@ app.post(
                     details
                 )
                 VALUES
-                ($1, $2, $3)
+                (
+                    $1,
+                    $2,
+                    $3
+                )
                 `,
                 [
                     userId,
@@ -5493,7 +5127,7 @@ app.post(
             );
 
 
-            res.json({
+            res.status(201).json({
 
                 success: true,
 
@@ -5502,24 +5136,28 @@ app.post(
 
                 message:
                     "Demande de paiement enregistrée"
-
             });
+
 
         } catch (error) {
 
-            console.error(error);
+            console.error(
+                "Erreur création paiement:",
+                error
+            );
+
 
             res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur création demande paiement"
+                    "Erreur création demande paiement",
 
+                error:
+                    error.message
             });
-
         }
-
     }
 );
 
@@ -5536,7 +5174,6 @@ app.patch(
         const client =
             await pool.connect();
 
-
         try {
 
             const id =
@@ -5545,55 +5182,76 @@ app.patch(
                 );
 
 
+            if (
+                !Number.isInteger(id) ||
+                id <= 0
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Identifiant paiement invalide"
+                });
+            }
+
+
             await client.query(
                 "BEGIN"
             );
 
 
-            const updateRes =
+            const payment =
                 await client.query(
                     `
-                    UPDATE demandes_paiement
-
-                    SET
-                        statut = 'valide',
-                        updated_at =
-                            CURRENT_TIMESTAMP
-
-                    WHERE id = $1
-
-                    RETURNING
+                    SELECT
+                        id,
                         user_id,
-                        montant
+                        montant,
+                        statut
+                    FROM demandes_paiement
+                    WHERE id = $1
+                    FOR UPDATE
                     `,
                     [id]
                 );
 
 
             if (
-                updateRes.rows.length === 0
+                payment.rows.length === 0
             ) {
 
                 await client.query(
                     "ROLLBACK"
                 );
 
-
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Demande de paiement introuvable"
-
                 });
-
             }
 
 
+            const row =
+                payment.rows[0];
+
             const userId =
-                updateRes.rows[0]
-                    .user_id;
+                Number(
+                    row.user_id
+                );
+
+
+            await client.query(
+                `
+                UPDATE demandes_paiement
+                SET
+                    statut = 'valide',
+                    updated_at =
+                        CURRENT_TIMESTAMP
+                WHERE id = $1
+                `,
+                [id]
+            );
 
 
             await client.query(
@@ -5609,24 +5267,12 @@ app.patch(
             );
 
 
-            await client.query(
-                `
-                INSERT INTO notifications
-                (
-                    user_id,
-                    title,
-                    message,
-                    type
-                )
-                VALUES
-                (
-                    $1,
-                    'Compte Premium activé',
-                    'Votre paiement a été validé. Votre compte est maintenant Premium.',
-                    'premium'
-                )
-                `,
-                [userId]
+            await createNotification(
+                client,
+                userId,
+                "Compte Premium activé",
+                "Votre paiement a été validé. Votre compte est maintenant Premium.",
+                "premium"
             );
 
 
@@ -5666,22 +5312,20 @@ app.patch(
 
                 message:
                     "Demande validée et utilisateur passé en Premium"
-
             });
+
 
         } catch (error) {
 
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
             } catch (_) {}
 
 
             console.error(
-                "Erreur validation paiement :",
+                "Erreur validation paiement:",
                 error
             );
 
@@ -5691,16 +5335,17 @@ app.patch(
                 success: false,
 
                 message:
-                    "Erreur serveur"
+                    "Erreur validation paiement",
 
+                error:
+                    error.message
             });
+
 
         } finally {
 
             client.release();
-
         }
-
     }
 );
 
@@ -5723,7 +5368,7 @@ app.patch(
 
             const note =
                 clean(
-                    req.body.note
+                    req.body?.note
                 );
 
 
@@ -5731,13 +5376,20 @@ app.patch(
                 await pool.query(
                     `
                     UPDATE demandes_paiement
+
                     SET
                         statut = 'refuse',
                         admin_note = $1,
                         updated_at =
                             CURRENT_TIMESTAMP
+
                     WHERE id = $2
-                    RETURNING user_id
+
+                    RETURNING
+                        id,
+                        user_id,
+                        statut,
+                        admin_note
                     `,
                     [
                         note,
@@ -5751,14 +5403,10 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Demande introuvable"
-
                 });
-
             }
 
 
@@ -5772,10 +5420,13 @@ app.patch(
 
                 success: true,
 
+                demande:
+                    result.rows[0],
+
                 message:
                     "Paiement refusé"
-
             });
+
 
         } catch (error) {
 
@@ -5786,219 +5437,12 @@ app.patch(
                 success: false,
 
                 message:
-                    "Erreur refus paiement"
+                    "Erreur refus paiement",
 
+                error:
+                    error.message
             });
-
         }
-
-    }
-);
-
-
-/* ============================================================
-   STATISTIQUES ADMIN
-============================================================ */
-
-app.get(
-    "/api/admin/statistiques",
-    adminAuth,
-    async (req, res) => {
-
-        try {
-
-            const users =
-                await pool.query(
-                    `
-                    SELECT
-
-                        COUNT(*) AS total,
-
-                        COUNT(*) FILTER (
-                            WHERE is_premium = TRUE
-                        ) AS premium,
-
-                        COUNT(*) FILTER (
-                            WHERE is_blocked = TRUE
-                        ) AS blocked,
-
-                        COUNT(*) FILTER (
-                            WHERE is_premium = FALSE
-                        ) AS standard,
-
-                        COUNT(*) FILTER (
-                            WHERE created_at >= CURRENT_DATE
-                        ) AS today
-
-                    FROM users
-                    `
-                );
-
-
-            const payments =
-                await pool.query(
-                    `
-                    SELECT
-
-                        COUNT(*) AS total,
-
-                        COUNT(*) FILTER (
-                            WHERE statut = 'pending'
-                        ) AS pending,
-
-                        COUNT(*) FILTER (
-                            WHERE statut = 'valide'
-                        ) AS validated,
-
-                        COUNT(*) FILTER (
-                            WHERE statut = 'refuse'
-                        ) AS refused,
-
-                        COALESCE(
-                            SUM(montant)
-                            FILTER (
-                                WHERE statut = 'valide'
-                            ),
-                            0
-                        ) AS revenue
-
-                    FROM demandes_paiement
-                    `
-                );
-
-
-            const messages =
-                await pool.query(
-                    `
-                    SELECT COUNT(*) AS total
-                    FROM messages
-                    `
-                );
-
-
-            const certificates =
-                await pool.query(
-                    `
-                    SELECT
-
-                        COUNT(*) AS total,
-
-                        COUNT(*) FILTER (
-                            WHERE is_authorized = TRUE
-                        ) AS authorized
-
-                    FROM certificates
-                    `
-                );
-
-
-            const u =
-                users.rows[0];
-
-            const p =
-                payments.rows[0];
-
-            const m =
-                messages.rows[0];
-
-            const c =
-                certificates.rows[0];
-
-
-            res.json({
-
-                success: true,
-
-                stats: {
-
-                    users:
-                        Number(
-                            u.total || 0
-                        ),
-
-                    premium:
-                        Number(
-                            u.premium || 0
-                        ),
-
-                    standard:
-                        Number(
-                            u.standard || 0
-                        ),
-
-                    blocked:
-                        Number(
-                            u.blocked || 0
-                        ),
-
-                    today:
-                        Number(
-                            u.today || 0
-                        ),
-
-                    payments:
-                        Number(
-                            p.total || 0
-                        ),
-
-                    pending:
-                        Number(
-                            p.pending || 0
-                        ),
-
-                    validated:
-                        Number(
-                            p.validated || 0
-                        ),
-
-                    refused:
-                        Number(
-                            p.refused || 0
-                        ),
-
-                    revenue:
-                        Number(
-                            p.revenue || 0
-                        ),
-
-                    messages:
-                        Number(
-                            m.total || 0
-                        ),
-
-                    certificates:
-                        Number(
-                            c.total || 0
-                        ),
-
-                    certificates_authorized:
-                        Number(
-                            c.authorized || 0
-                        )
-
-                }
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Erreur statistiques :",
-                error
-            );
-
-
-            res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Erreur récupération statistiques"
-
-            });
-
-        }
-
     }
 );
 
@@ -6043,10 +5487,13 @@ app.get(
 
                 success: true,
 
+                count:
+                    result.rows.length,
+
                 activities:
                     result.rows
-
             });
+
 
         } catch (error) {
 
@@ -6058,11 +5505,8 @@ app.get(
 
                 message:
                     "Erreur activités admin"
-
             });
-
         }
-
     }
 );
 
@@ -6103,8 +5547,8 @@ app.get(
 
                 activities:
                     result.rows
-
             });
+
 
         } catch (error) {
 
@@ -6116,17 +5560,15 @@ app.get(
 
                 message:
                     "Erreur activité utilisateur"
-
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
    SUPPRESSION UTILISATEUR
+   ACTION ADMIN EXPLICITE UNIQUEMENT
 ============================================================ */
 
 app.delete(
@@ -6147,6 +5589,7 @@ app.delete(
                     `
                     DELETE FROM users
                     WHERE id = $1
+
                     RETURNING
                         id,
                         email
@@ -6160,14 +5603,10 @@ app.delete(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
@@ -6183,8 +5622,8 @@ app.delete(
 
                 message:
                     "Utilisateur supprimé définitivement"
-
             });
+
 
         } catch (error) {
 
@@ -6195,1006 +5634,524 @@ app.delete(
                 success: false,
 
                 message:
-                    "Erreur suppression utilisateur"
+                    "Erreur suppression utilisateur",
 
+                error:
+                    error.message
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   INSCRIPTION UTILISATEUR
-   ROUTE PRINCIPALE DE LA PAGE D'INSCRIPTION
+   INSCRIPTION
 ============================================================ */
 
-app.post(
-    "/api/inscription",
-    async (req, res) => {
+async function registerUser(
+    req,
+    res
+) {
 
-        try {
+    try {
+
+        const nom =
+            clean(
+                req.body?.nom
+            );
 
-            const nom =
-                clean(
-                    req.body.nom
-                );
+        const sexe =
+            clean(
+                req.body?.sexe
+            );
 
-            const sexe =
-                clean(
-                    req.body.sexe
-                );
+        const email =
+            clean(
+                req.body?.email
+            ).toLowerCase();
 
-            const email =
-                clean(
-                    req.body.email
-                ).toLowerCase();
+        const telephone =
+            clean(
+                req.body?.telephone
+            );
 
-            const telephone =
-                clean(
-                    req.body.telephone
-                );
+        const domaine =
+            clean(
+                req.body?.domaine
+            );
 
-            const domaine =
-                clean(
-                    req.body.domaine
-                );
+        const pays =
+            clean(
+                req.body?.pays
+            );
 
-            const pays =
-                clean(
-                    req.body.pays
-                );
+        const ville =
+            clean(
+                req.body?.ville
+            );
 
-            const ville =
-                clean(
-                    req.body.ville
-                );
+        const niveau =
+            clean(
+                req.body?.niveau
+            );
 
-            const niveau =
-                clean(
-                    req.body.niveau
-                );
+        const password =
+            String(
+                req.body?.password || ""
+            );
 
-            const password =
-                String(
-                    req.body.password || ""
-                );
+        const photo =
+            clean(
+                req.body?.photo
+            );
 
-            const photo =
-                clean(
-                    req.body.photo
-                );
 
+        if (!nom) {
 
-            /* =================================================
-               VALIDATIONS
-            ================================================= */
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Le nom est requis"
+            });
+        }
 
-            if (!nom) {
 
-                return res.status(400).json({
+        if (!email) {
 
-                    success: false,
+            return res.status(400).json({
+                success: false,
+                message:
+                    "L'adresse email est requise"
+            });
+        }
 
-                    message:
-                        "Le nom est requis"
 
-                });
+        if (!isValidEmail(email)) {
 
-            }
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Adresse email invalide"
+            });
+        }
 
 
-            if (!email) {
+        if (!password) {
 
-                return res.status(400).json({
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Le mot de passe est requis"
+            });
+        }
 
-                    success: false,
 
-                    message:
-                        "L'adresse email est requise"
+        if (
+            password.length < 6
+        ) {
 
-                });
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Le mot de passe doit contenir au moins 6 caractères"
+            });
+        }
 
-            }
 
-
-            if (!isValidEmail(email)) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Adresse email invalide"
-
-                });
-
-            }
-
-
-            if (!password) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Le mot de passe est requis"
-
-                });
-
-            }
-
-
-            if (
-                password.length < 6
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Le mot de passe doit contenir au moins 6 caractères"
-
-                });
-
-            }
-
-
-            /* =================================================
-               VÉRIFICATION EMAIL
-            ================================================= */
-
-            const existingUser =
-                await pool.query(
-                    `
-                    SELECT id
-                    FROM users
-                    WHERE LOWER(email) = $1
-                    LIMIT 1
-                    `,
-                    [email]
-                );
-
-
-            if (
-                existingUser.rows.length > 0
-            ) {
-
-                return res.status(409).json({
-
-                    success: false,
-
-                    message:
-                        "Cette adresse email est déjà utilisée"
-
-                });
-
-            }
-
-
-            /* =================================================
-               INSERTION
-            ================================================= */
-
-            const result =
-                await pool.query(
-                    `
-                    INSERT INTO users
-                    (
-                        nom,
-                        sexe,
-                        email,
-                        telephone,
-                        domaine,
-                        pays,
-                        ville,
-                        niveau,
-                        password,
-                        photo,
-                        progression,
-                        is_premium,
-                        is_blocked,
-                        certificat_autorise,
-                        certificat_obtenu,
-                        created_at,
-                        updated_at
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4,
-                        $5,
-                        $6,
-                        $7,
-                        $8,
-                        $9,
-                        $10,
-                        0,
-                        FALSE,
-                        FALSE,
-                        FALSE,
-                        FALSE,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
-                    )
-                    RETURNING
-                        id,
-                        nom,
-                        sexe,
-                        email,
-                        telephone,
-                        domaine,
-                        pays,
-                        ville,
-                        niveau,
-                        photo,
-                        progression,
-                        is_premium,
-                        is_blocked,
-                        certificat_autorise,
-                        certificat_obtenu,
-                        premium_until,
-                        created_at,
-                        updated_at,
-                        last_login
-                    `,
-                    [
-                        nom,
-                        sexe,
-                        email,
-                        telephone,
-                        domaine,
-                        pays,
-                        ville,
-                        niveau,
-                        hashPassword(password),
-                        photo
-                    ]
-                );
-
-
-            const user =
-                result.rows[0];
-
-
-            /* =================================================
-               JOURNAL
-            ================================================= */
-
+        const existing =
             await pool.query(
                 `
-                INSERT INTO user_activity
+                SELECT id
+                FROM users
+                WHERE LOWER(email) = $1
+                LIMIT 1
+                `,
+                [email]
+            );
+
+
+        if (
+            existing.rows.length > 0
+        ) {
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Cette adresse email est déjà utilisée"
+            });
+        }
+
+
+        const result =
+            await pool.query(
+                `
+                INSERT INTO users
                 (
-                    user_id,
-                    action,
-                    details
+                    nom,
+                    sexe,
+                    email,
+                    telephone,
+                    domaine,
+                    pays,
+                    ville,
+                    niveau,
+                    password,
+                    photo,
+                    progression,
+                    is_premium,
+                    is_blocked,
+                    certificat_autorise,
+                    certificat_obtenu,
+                    created_at,
+                    updated_at
                 )
                 VALUES
                 (
                     $1,
                     $2,
-                    $3
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $8,
+                    $9,
+                    $10,
+                    0,
+                    FALSE,
+                    FALSE,
+                    FALSE,
+                    FALSE,
+                    CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP
                 )
+                RETURNING
+                    id,
+                    nom,
+                    sexe,
+                    email,
+                    telephone,
+                    domaine,
+                    pays,
+                    ville,
+                    niveau,
+                    photo,
+                    progression,
+                    is_premium,
+                    is_blocked,
+                    certificat_autorise,
+                    certificat_obtenu,
+                    premium_until,
+                    created_at,
+                    updated_at,
+                    last_login
                 `,
                 [
-                    user.id,
-                    "INSCRIPTION",
-                    "Création du compte depuis la page d'inscription"
+                    nom,
+                    sexe,
+                    email,
+                    telephone,
+                    domaine,
+                    pays,
+                    ville,
+                    niveau,
+                    hashPassword(
+                        password
+                    ),
+                    photo
                 ]
             );
 
 
-            res.status(201).json({
-
-                success: true,
-
-                message:
-                    "Inscription réussie",
-
-                user
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Erreur inscription :",
-                error
-            );
+        const user =
+            result.rows[0];
 
 
-            if (
-                error.code === "23505"
-            ) {
+        await pool.query(
+            `
+            INSERT INTO user_activity
+            (
+                user_id,
+                action,
+                details
+            )
+            VALUES
+            (
+                $1,
+                'INSCRIPTION',
+                'Création du compte depuis la page d'inscription'
+            )
+            `,
+            [user.id]
+        );
 
-                return res.status(409).json({
 
-                    success: false,
+        res.status(201).json({
 
-                    message:
-                        "Cette adresse email est déjà utilisée"
+            success: true,
 
-                });
+            message:
+                "Inscription réussie",
 
-            }
+            user
+        });
 
 
-            res.status(500).json({
+    } catch (error) {
 
+        console.error(
+            "Erreur inscription:",
+            error
+        );
+
+
+        if (
+            error.code === "23505"
+        ) {
+
+            return res.status(409).json({
                 success: false,
-
                 message:
-                    "Erreur lors de l'inscription"
-
+                    "Cette adresse email est déjà utilisée"
             });
-
         }
 
+
+        res.status(500).json({
+
+            success: false,
+
+            message:
+                "Erreur lors de l'inscription",
+
+            error:
+                error.message
+        });
     }
+}
+
+
+app.post(
+    "/api/inscription",
+    registerUser
 );
 
 
-/* ============================================================
-   COMPATIBILITÉ ANCIENNE INSCRIPTION
-   /api/register
-============================================================ */
-
 app.post(
     "/api/register",
-    async (req, res) => {
-
-        try {
-
-            const nom =
-                clean(req.body.nom);
-
-            const sexe =
-                clean(req.body.sexe);
-
-            const email =
-                clean(req.body.email)
-                    .toLowerCase();
-
-            const telephone =
-                clean(req.body.telephone);
-
-            const domaine =
-                clean(req.body.domaine);
-
-            const pays =
-                clean(req.body.pays);
-
-            const ville =
-                clean(req.body.ville);
-
-            const niveau =
-                clean(req.body.niveau);
-
-            const password =
-                String(
-                    req.body.password || ""
-                );
-
-            const photo =
-                clean(req.body.photo);
-
-
-            if (
-                !email ||
-                !password
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Email et mot de passe requis"
-
-                });
-
-            }
-
-
-            if (
-                !isValidEmail(email)
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Adresse email invalide"
-
-                });
-
-            }
-
-
-            if (
-                password.length < 6
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Le mot de passe doit contenir au moins 6 caractères"
-
-                });
-
-            }
-
-
-            const result =
-                await pool.query(
-                    `
-                    INSERT INTO users
-                    (
-                        nom,
-                        sexe,
-                        email,
-                        telephone,
-                        domaine,
-                        pays,
-                        ville,
-                        niveau,
-                        password,
-                        photo
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4,
-                        $5,
-                        $6,
-                        $7,
-                        $8,
-                        $9,
-                        $10
-                    )
-                    RETURNING
-                        id,
-                        nom,
-                        sexe,
-                        email,
-                        telephone,
-                        domaine,
-                        pays,
-                        ville,
-                        niveau,
-                        photo,
-                        progression,
-                        is_premium,
-                        is_blocked,
-                        certificat_autorise,
-                        certificat_obtenu,
-                        premium_until,
-                        created_at
-                    `,
-                    [
-                        nom ||
-                            "Client",
-
-                        sexe,
-
-                        email,
-
-                        telephone,
-
-                        domaine,
-
-                        pays,
-
-                        ville,
-
-                        niveau,
-
-                        hashPassword(
-                            password
-                        ),
-
-                        photo
-                    ]
-                );
-
-
-            const user =
-                result.rows[0];
-
-
-            await pool.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                (
-                    $1,
-                    'INSCRIPTION',
-                    'Création du compte'
-                )
-                `,
-                [user.id]
-            );
-
-
-            res.status(201).json({
-
-                success: true,
-
-                message:
-                    "Inscription réussie",
-
-                user
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Erreur register :",
-                error
-            );
-
-
-            if (
-                error.code === "23505"
-            ) {
-
-                return res.status(409).json({
-
-                    success: false,
-
-                    message:
-                        "Cette adresse email est déjà utilisée"
-
-                });
-
-            }
-
-
-            res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Erreur lors de l'inscription"
-
-            });
-
-        }
-
-    }
+    registerUser
 );
 
 
 /* ============================================================
    CONNEXION UTILISATEUR
-   ROUTE PRINCIPALE DE LA PAGE DE CONNEXION
 ============================================================ */
+
+async function loginUser(
+    req,
+    res
+) {
+
+    try {
+
+        const email =
+            clean(
+                req.body?.email
+            ).toLowerCase();
+
+        const password =
+            String(
+                req.body?.password || ""
+            );
+
+
+        if (!email) {
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "L'adresse email est requise"
+            });
+        }
+
+
+        if (
+            !isValidEmail(email)
+        ) {
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Adresse email invalide"
+            });
+        }
+
+
+        if (!password) {
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Le mot de passe est requis"
+            });
+        }
+
+
+        const result =
+            await pool.query(
+                `
+                SELECT
+                    id,
+                    nom,
+                    sexe,
+                    email,
+                    telephone,
+                    domaine,
+                    pays,
+                    ville,
+                    niveau,
+                    photo,
+                    password,
+                    progression,
+                    is_premium,
+                    is_blocked,
+                    certificat_autorise,
+                    certificat_obtenu,
+                    premium_until,
+                    created_at,
+                    updated_at,
+                    last_login
+                FROM users
+                WHERE LOWER(email) = $1
+                LIMIT 1
+                `,
+                [email]
+            );
+
+
+        if (
+            result.rows.length === 0
+        ) {
+
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Email ou mot de passe incorrect"
+            });
+        }
+
+
+        const user =
+            result.rows[0];
+
+
+        if (
+            user.password !==
+            hashPassword(
+                password
+            )
+        ) {
+
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Email ou mot de passe incorrect"
+            });
+        }
+
+
+        if (
+            user.is_blocked === true
+        ) {
+
+            return res.status(403).json({
+                success: false,
+                message:
+                    "Ce compte a été bloqué par l'administration"
+            });
+        }
+
+
+        await pool.query(
+            `
+            UPDATE users
+            SET
+                last_login =
+                    CURRENT_TIMESTAMP,
+
+                updated_at =
+                    CURRENT_TIMESTAMP
+
+            WHERE id = $1
+            `,
+            [user.id]
+        );
+
+
+        await pool.query(
+            `
+            INSERT INTO user_activity
+            (
+                user_id,
+                action,
+                details
+            )
+            VALUES
+            (
+                $1,
+                'CONNEXION',
+                'Connexion utilisateur'
+            )
+            `,
+            [user.id]
+        );
+
+
+        delete user.password;
+
+
+        res.json({
+
+            success: true,
+
+            message:
+                "Connexion réussie",
+
+            user
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "Erreur connexion:",
+            error
+        );
+
+
+        res.status(500).json({
+
+            success: false,
+
+            message:
+                "Erreur serveur",
+
+            error:
+                error.message
+        });
+    }
+}
+
 
 app.post(
     "/api/connexion",
-    async (req, res) => {
-
-        try {
-
-            const email =
-                clean(
-                    req.body.email
-                ).toLowerCase();
-
-            const password =
-                String(
-                    req.body.password || ""
-                );
-
-
-            if (!email) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "L'adresse email est requise"
-
-                });
-
-            }
-
-
-            if (
-                !isValidEmail(email)
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Adresse email invalide"
-
-                });
-
-            }
-
-
-            if (!password) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Le mot de passe est requis"
-
-                });
-
-            }
-
-
-            const result =
-                await pool.query(
-                    `
-                    SELECT
-                        id,
-                        nom,
-                        sexe,
-                        email,
-                        telephone,
-                        domaine,
-                        pays,
-                        ville,
-                        niveau,
-                        photo,
-                        password,
-                        progression,
-                        is_premium,
-                        is_blocked,
-                        certificat_autorise,
-                        certificat_obtenu,
-                        premium_until,
-                        created_at,
-                        updated_at,
-                        last_login
-                    FROM users
-                    WHERE LOWER(email) = $1
-                    LIMIT 1
-                    `,
-                    [email]
-                );
-
-
-            if (
-                result.rows.length === 0
-            ) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    message:
-                        "Email ou mot de passe incorrect"
-
-                });
-
-            }
-
-
-            const user =
-                result.rows[0];
-
-
-            if (
-                user.password !==
-                hashPassword(password)
-            ) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    message:
-                        "Email ou mot de passe incorrect"
-
-                });
-
-            }
-
-
-            if (
-                user.is_blocked === true
-            ) {
-
-                return res.status(403).json({
-
-                    success: false,
-
-                    message:
-                        "Ce compte a été bloqué par l'administration"
-
-                });
-
-            }
-
-
-            await pool.query(
-                `
-                UPDATE users
-                SET
-                    last_login =
-                        CURRENT_TIMESTAMP,
-
-                    updated_at =
-                        CURRENT_TIMESTAMP
-
-                WHERE id = $1
-                `,
-                [user.id]
-            );
-
-
-            await pool.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                (
-                    $1,
-                    'CONNEXION',
-                    'Connexion utilisateur'
-                )
-                `,
-                [user.id]
-            );
-
-
-            delete user.password;
-
-
-            res.json({
-
-                success: true,
-
-                message:
-                    "Connexion réussie",
-
-                user
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Erreur connexion :",
-                error
-            );
-
-
-            res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Erreur serveur"
-
-            });
-
-        }
-
-    }
+    loginUser
 );
 
 
-/* ============================================================
-   COMPATIBILITÉ ANCIENNE CONNEXION
-   /api/login
-============================================================ */
-
 app.post(
     "/api/login",
-    async (req, res) => {
-
-        try {
-
-            const email =
-                clean(
-                    req.body.email
-                ).toLowerCase();
-
-            const password =
-                String(
-                    req.body.password || ""
-                );
-
-
-            if (
-                !email ||
-                !password
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Email et mot de passe requis"
-
-                });
-
-            }
-
-
-            const result =
-                await pool.query(
-                    `
-                    SELECT
-                        id,
-                        nom,
-                        sexe,
-                        email,
-                        telephone,
-                        domaine,
-                        pays,
-                        ville,
-                        niveau,
-                        photo,
-                        password,
-                        progression,
-                        is_premium,
-                        is_blocked,
-                        certificat_autorise,
-                        certificat_obtenu,
-                        premium_until,
-                        created_at,
-                        updated_at,
-                        last_login
-                    FROM users
-                    WHERE LOWER(email) = $1
-                    LIMIT 1
-                    `,
-                    [email]
-                );
-
-
-            if (
-                result.rows.length === 0
-            ) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    message:
-                        "Identifiants utilisateur incorrects"
-
-                });
-
-            }
-
-
-            const user =
-                result.rows[0];
-
-
-            if (
-                user.password !==
-                hashPassword(password)
-            ) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    message:
-                        "Identifiants utilisateur incorrects"
-
-                });
-
-            }
-
-
-            if (
-                user.is_blocked
-            ) {
-
-                return res.status(403).json({
-
-                    success: false,
-
-                    message:
-                        "Ce compte a été bloqué par l'administration"
-
-                });
-
-            }
-
-
-            await pool.query(
-                `
-                UPDATE users
-                SET
-                    last_login =
-                        CURRENT_TIMESTAMP,
-                    updated_at =
-                        CURRENT_TIMESTAMP
-                WHERE id = $1
-                `,
-                [user.id]
-            );
-
-
-            await pool.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                (
-                    $1,
-                    'CONNEXION',
-                    'Connexion utilisateur'
-                )
-                `,
-                [user.id]
-            );
-
-
-            delete user.password;
-
-
-            res.json({
-
-                success: true,
-
-                message:
-                    "Connexion réussie",
-
-                user
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Erreur login :",
-                error
-            );
-
-
-            res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Erreur serveur"
-
-            });
-
-        }
-
-    }
+    loginUser
 );
 
 
@@ -7249,14 +6206,10 @@ app.get(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
@@ -7266,30 +6219,25 @@ app.get(
 
                 user:
                     result.rows[0]
-
             });
+
 
         } catch (error) {
 
             console.error(error);
 
             res.status(500).json({
-
                 success: false,
-
                 message:
                     "Erreur serveur"
-
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   PROGRESSION PUBLIQUE UTILISATEUR
+   PROGRESSION UTILISATEUR
 ============================================================ */
 
 app.get(
@@ -7322,8 +6270,8 @@ app.get(
 
                 progress:
                     result.rows
-
             });
+
 
         } catch (error) {
 
@@ -7335,11 +6283,8 @@ app.get(
 
                 message:
                     "Erreur progression"
-
             });
-
         }
-
     }
 );
 
@@ -7374,8 +6319,7 @@ app.get(
                         parent_id,
                         created_at
                     FROM messages
-                    WHERE
-                        recipient_user_id = $1
+                    WHERE recipient_user_id = $1
                     ORDER BY id DESC
                     `,
                     [userId]
@@ -7388,8 +6332,8 @@ app.get(
 
                 messages:
                     result.rows
-
             });
+
 
         } catch (error) {
 
@@ -7401,11 +6345,8 @@ app.get(
 
                 message:
                     "Erreur messages"
-
             });
-
         }
-
     }
 );
 
@@ -7439,9 +6380,11 @@ app.patch(
                         is_read = TRUE,
                         updated_at =
                             CURRENT_TIMESTAMP
+
                     WHERE
                         id = $1
                         AND recipient_user_id = $2
+
                     RETURNING id
                     `,
                     [
@@ -7456,14 +6399,10 @@ app.patch(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Message introuvable"
-
                 });
-
             }
 
 
@@ -7473,8 +6412,8 @@ app.patch(
 
                 message:
                     "Message marqué comme lu"
-
             });
+
 
         } catch (error) {
 
@@ -7486,11 +6425,8 @@ app.patch(
 
                 message:
                     "Erreur message"
-
             });
-
         }
-
     }
 );
 
@@ -7530,14 +6466,10 @@ app.get(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
@@ -7553,6 +6485,10 @@ app.get(
                 );
 
 
+            const user =
+                userResult.rows[0];
+
+
             res.json({
 
                 success: true,
@@ -7561,26 +6497,22 @@ app.get(
 
                     allowed:
                         Boolean(
-                            userResult.rows[0]
-                                .certificat_autorise
+                            user.certificat_autorise
                         ),
 
                     obtained:
                         Boolean(
-                            userResult.rows[0]
-                                .certificat_obtenu
+                            user.certificat_obtenu
                         ),
 
                     progression:
-                        userResult.rows[0]
-                            .progression
-
+                        user.progression
                 },
 
                 certificates:
                     result.rows
-
             });
+
 
         } catch (error) {
 
@@ -7592,17 +6524,14 @@ app.get(
 
                 message:
                     "Erreur certificats"
-
             });
-
         }
-
     }
 );
 
 
 /* ============================================================
-   VÉRIFICATION AUTORISATION CERTIFICAT
+   ACCÈS CERTIFICAT
 ============================================================ */
 
 app.get(
@@ -7638,14 +6567,10 @@ app.get(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
@@ -7671,9 +6596,11 @@ app.get(
                     user.progression,
 
                 is_premium:
-                    user.is_premium
-
+                    Boolean(
+                        user.is_premium
+                    )
             });
+
 
         } catch (error) {
 
@@ -7685,11 +6612,8 @@ app.get(
 
                 message:
                     "Erreur vérification certificat"
-
             });
-
         }
-
     }
 );
 
@@ -7714,22 +6638,25 @@ app.use(
 
             path:
                 req.originalUrl
-
         });
-
     }
 );
 
 
 /* ============================================================
-   GESTION ERREUR GLOBALE
+   ERREUR GLOBALE
 ============================================================ */
 
 app.use(
-    (error, req, res, next) => {
+    (
+        error,
+        req,
+        res,
+        next
+    ) => {
 
         console.error(
-            "Erreur globale :",
+            "Erreur globale:",
             error
         );
 
@@ -7739,7 +6666,6 @@ app.use(
         ) {
 
             return next(error);
-
         }
 
 
@@ -7748,10 +6674,11 @@ app.use(
             success: false,
 
             message:
-                "Erreur interne du serveur"
+                "Erreur interne du serveur",
 
+            error:
+                error.message
         });
-
     }
 );
 
@@ -7773,39 +6700,40 @@ async function gracefulShutdown(
 
         await pool.end();
 
-
         console.log(
             "Connexion PostgreSQL fermée."
         );
 
-
         process.exit(0);
+
 
     } catch (error) {
 
         console.error(
-            "Erreur arrêt serveur :",
+            "Erreur arrêt serveur:",
             error
         );
 
-
         process.exit(1);
-
     }
-
 }
 
 
 process.on(
     "SIGTERM",
     () =>
-        gracefulShutdown("SIGTERM")
+        gracefulShutdown(
+            "SIGTERM"
+        )
 );
+
 
 process.on(
     "SIGINT",
     () =>
-        gracefulShutdown("SIGINT")
+        gracefulShutdown(
+            "SIGINT"
+        )
 );
 
 
@@ -7847,6 +6775,14 @@ async function startServer() {
             );
 
             console.log(
+                " Statistiques : activées"
+            );
+
+            console.log(
+                " Utilisateurs : activés"
+            );
+
+            console.log(
                 " Inscription : activée"
             );
 
@@ -7881,10 +6817,8 @@ async function startServer() {
             console.log(
                 "=================================================="
             );
-
         }
     );
-
 }
 
 
@@ -7893,11 +6827,10 @@ startServer()
         error => {
 
             console.error(
-                "Impossible de démarrer le serveur :",
+                "Impossible de démarrer le serveur:",
                 error
             );
 
             process.exit(1);
-
         }
     );
