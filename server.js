@@ -5645,55 +5645,41 @@ app.delete(
 
 
 /* ============================================================
-   INSCRIPTION
+   INSCRIPTION UTILISATEUR
 ============================================================ */
 
-async function registerUser(
-    req,
-    res
-) {
+async function registerUser(req, res) {
 
     try {
 
+        /* ----------------------------------------------------
+           RÉCUPÉRATION ET NETTOYAGE
+        ---------------------------------------------------- */
+
         const nom =
-            clean(
-                req.body?.nom
-            );
+            clean(req.body?.nom);
 
         const sexe =
-            clean(
-                req.body?.sexe
-            );
+            clean(req.body?.sexe);
 
         const email =
-            clean(
-                req.body?.email
-            ).toLowerCase();
+            clean(req.body?.email)
+                .toLowerCase();
 
         const telephone =
-            clean(
-                req.body?.telephone
-            );
+            clean(req.body?.telephone);
 
         const domaine =
-            clean(
-                req.body?.domaine
-            );
+            clean(req.body?.domaine);
 
         const pays =
-            clean(
-                req.body?.pays
-            );
+            clean(req.body?.pays);
 
         const ville =
-            clean(
-                req.body?.ville
-            );
+            clean(req.body?.ville);
 
         const niveau =
-            clean(
-                req.body?.niveau
-            );
+            clean(req.body?.niveau);
 
         const password =
             String(
@@ -5701,17 +5687,18 @@ async function registerUser(
             );
 
         const photo =
-            clean(
-                req.body?.photo
-            );
+            clean(req.body?.photo);
 
+
+        /* ----------------------------------------------------
+           VALIDATION
+        ---------------------------------------------------- */
 
         if (!nom) {
 
             return res.status(400).json({
                 success: false,
-                message:
-                    "Le nom est requis"
+                message: "Le nom est requis"
             });
         }
 
@@ -5746,9 +5733,7 @@ async function registerUser(
         }
 
 
-        if (
-            password.length < 6
-        ) {
+        if (password.length < 6) {
 
             return res.status(400).json({
                 success: false,
@@ -5757,6 +5742,10 @@ async function registerUser(
             });
         }
 
+
+        /* ----------------------------------------------------
+           VÉRIFIER EMAIL EXISTANT
+        ---------------------------------------------------- */
 
         const existing =
             await pool.query(
@@ -5770,17 +5759,29 @@ async function registerUser(
             );
 
 
-        if (
-            existing.rows.length > 0
-        ) {
+        if (existing.rows.length > 0) {
 
             return res.status(409).json({
                 success: false,
                 message:
-                    "Cette adresse email est déjà utilisée"
+                    "Cette adresse email est déjà utilisée",
+                code:
+                    "EMAIL_EXISTS"
             });
         }
 
+
+        /* ----------------------------------------------------
+           HASH DU MOT DE PASSE
+        ---------------------------------------------------- */
+
+        const passwordHash =
+            hashPassword(password);
+
+
+        /* ----------------------------------------------------
+           CRÉER L'UTILISATEUR
+        ---------------------------------------------------- */
 
         const result =
             await pool.query(
@@ -5855,9 +5856,7 @@ async function registerUser(
                     pays,
                     ville,
                     niveau,
-                    hashPassword(
-                        password
-                    ),
+                    passwordHash,
                     photo
                 ]
             );
@@ -5867,62 +5866,108 @@ async function registerUser(
             result.rows[0];
 
 
-        await pool.query(
-            `
-            INSERT INTO user_activity
-            (
-                user_id,
-                action,
-                details
-            )
-            VALUES
-            (
-                $1,
-                'INSCRIPTION',
-                'Création du compte depuis la page d'inscription'
-            )
-            `,
-            [user.id]
-        );
+        /* ----------------------------------------------------
+           ENREGISTRER L'ACTIVITÉ
+           
+           IMPORTANT :
+           Cette opération ne doit PAS faire échouer
+           l'inscription si user_activity rencontre
+           un problème.
+        ---------------------------------------------------- */
+
+        try {
+
+            await pool.query(
+                `
+                INSERT INTO user_activity
+                (
+                    user_id,
+                    action,
+                    details
+                )
+                VALUES
+                (
+                    $1,
+                    'INSCRIPTION',
+                    'Création du compte depuis la page d'inscription'
+                )
+                `,
+                [user.id]
+            );
+
+        } catch (activityError) {
+
+            console.error(
+                "[INSCRIPTION] Erreur user_activity :",
+                activityError
+            );
+
+            /*
+             * On ne bloque PAS l'inscription.
+             *
+             * L'utilisateur existe déjà dans users.
+             */
+        }
 
 
-        res.status(201).json({
+        /* ----------------------------------------------------
+           RÉPONSE FINALE
+        ---------------------------------------------------- */
+
+        return res.status(201).json({
 
             success: true,
 
             message:
                 "Inscription réussie",
 
-            user
+            user: user
+
         });
 
 
     } catch (error) {
 
         console.error(
-            "Erreur inscription:",
+            "[INSCRIPTION] ERREUR :",
             error
         );
 
+
+        /* ----------------------------------------------------
+           EMAIL UNIQUE
+        ---------------------------------------------------- */
 
         if (
             error.code === "23505"
         ) {
 
             return res.status(409).json({
+
                 success: false,
+
                 message:
-                    "Cette adresse email est déjà utilisée"
+                    "Cette adresse email est déjà utilisée",
+
+                code:
+                    "EMAIL_EXISTS"
             });
         }
 
 
-        res.status(500).json({
+        /* ----------------------------------------------------
+           ERREUR SQL / SERVEUR
+        ---------------------------------------------------- */
+
+        return res.status(500).json({
 
             success: false,
 
             message:
                 "Erreur lors de l'inscription",
+
+            code:
+                "REGISTRATION_ERROR",
 
             error:
                 error.message
@@ -5930,6 +5975,10 @@ async function registerUser(
     }
 }
 
+
+/* ============================================================
+   ROUTES INSCRIPTION
+============================================================ */
 
 app.post(
     "/api/inscription",
@@ -5941,7 +5990,6 @@ app.post(
     "/api/register",
     registerUser
 );
-
 
 /* ============================================================
    CONNEXION UTILISATEUR
