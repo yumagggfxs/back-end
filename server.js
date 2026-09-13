@@ -3544,13 +3544,51 @@ app.get(
    MESSAGES — UTILITAIRES
 ============================================================ */
 
+/*
+ * Convertit la priorité du message en type de notification
+ * compatible avec la table notifications.
+ *
+ * Priorités message :
+ * normal / important / urgent
+ *
+ * Types notification :
+ * info / warning / error
+ */
+function getNotificationTypeFromPriority(priority) {
+
+    const value =
+        String(priority || "normal")
+            .trim()
+            .toLowerCase();
+
+    if (value === "urgent") {
+        return "error";
+    }
+
+    if (value === "important") {
+        return "warning";
+    }
+
+    return "info";
+}
+
+
+/* ============================================================
+   NOTIFICATION
+============================================================ */
+
 async function createNotification(
     client,
     userId,
     title,
     message,
-    type = "info"
+    priority = "normal"
 ) {
+
+    const notificationType =
+        getNotificationTypeFromPriority(
+            priority
+        );
 
     await client.query(
         `
@@ -3570,12 +3608,68 @@ async function createNotification(
         )
         `,
         [
-            userId,
-            title,
-            message,
-            type
+            Number(userId),
+            String(title || "Message BMJ SERVICE"),
+            String(message || ""),
+            notificationType
         ]
     );
+}
+
+
+/* ============================================================
+   NORMALISATION MESSAGE
+============================================================ */
+
+function safeMessageSubject(value) {
+
+    const subject =
+        String(value || "")
+            .trim();
+
+    if (!subject) {
+        return "Message BMJ SERVICE";
+    }
+
+    return subject.substring(
+        0,
+        255
+    );
+}
+
+
+function safeMessageContent(value) {
+
+    return String(
+        value || ""
+    ).trim();
+}
+
+
+function safeMessagePriority(value) {
+
+    const allowed = [
+        "normal",
+        "important",
+        "urgent"
+    ];
+
+    const priority =
+        String(value || "normal")
+            .trim()
+            .toLowerCase();
+
+    if (
+        allowed.includes(
+            priority
+        )
+    ) {
+
+        return priority;
+
+    }
+
+    return "normal";
 }
 
 
@@ -3599,43 +3693,61 @@ app.post(
                 );
 
             const subject =
-                normalizeMessageSubject(
+                safeMessageSubject(
                     req.body?.subject
                 );
 
             const message =
-                normalizeMessageContent(
+                safeMessageContent(
                     req.body?.message
                 );
 
             const priority =
-                normalizeMessagePriority(
+                safeMessagePriority(
                     req.body?.priority
                 );
 
 
+            /* ------------------------------------------------
+               VALIDATION
+            ------------------------------------------------ */
+
             if (
-                !Number.isInteger(userId) ||
+                !Number.isInteger(
+                    userId
+                ) ||
                 userId <= 0
             ) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Utilisateur invalide"
+
                 });
+
             }
 
 
             if (!message) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Le message est requis"
+
                 });
+
             }
 
+
+            /* ------------------------------------------------
+               VERIFICATION UTILISATEUR
+            ------------------------------------------------ */
 
             const userResult =
                 await client.query(
@@ -3649,7 +3761,9 @@ app.post(
                     FROM users
                     WHERE id = $1
                     `,
-                    [userId]
+                    [
+                        userId
+                    ]
                 );
 
 
@@ -3658,30 +3772,51 @@ app.post(
             ) {
 
                 return res.status(404).json({
+
                     success: false,
+
                     message:
                         "Utilisateur introuvable"
+
                 });
+
             }
+
+
+            const user =
+                userResult.rows[0];
 
 
             if (
-                userResult.rows[0]
-                    .is_blocked
+                Boolean(
+                    user.is_blocked
+                )
             ) {
 
                 return res.status(403).json({
+
                     success: false,
+
                     message:
                         "Impossible d'envoyer un message à un utilisateur bloqué"
+
                 });
+
             }
 
+
+            /* ------------------------------------------------
+               TRANSACTION
+            ------------------------------------------------ */
 
             await client.query(
                 "BEGIN"
             );
 
+
+            /* ------------------------------------------------
+               INSERT MESSAGE
+            ------------------------------------------------ */
 
             const result =
                 await client.query(
@@ -3695,7 +3830,11 @@ app.post(
                         audience,
                         subject,
                         message,
-                        priority
+                        priority,
+                        is_read,
+                        is_archived,
+                        created_at,
+                        updated_at
                     )
                     VALUES
                     (
@@ -3706,7 +3845,11 @@ app.post(
                         'individual',
                         $2,
                         $3,
-                        $4
+                        $4,
+                        FALSE,
+                        FALSE,
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP
                     )
                     RETURNING *
                     `,
@@ -3719,6 +3862,10 @@ app.post(
                 );
 
 
+            /* ------------------------------------------------
+               NOTIFICATION
+            ------------------------------------------------ */
+
             await createNotification(
                 client,
                 userId,
@@ -3728,45 +3875,67 @@ app.post(
             );
 
 
+            /* ------------------------------------------------
+               VALIDATION TRANSACTION
+            ------------------------------------------------ */
+
             await client.query(
                 "COMMIT"
             );
 
 
-            await logAdminAction(
-                "MESSAGE_UTILISATEUR",
-                `Message envoyé à l'utilisateur ${userId}`
-            );
+            /* ------------------------------------------------
+               JOURNAL ADMIN
+            ------------------------------------------------ */
+
+            try {
+
+                await logAdminAction(
+                    "MESSAGE_UTILISATEUR",
+                    `Message envoyé à ${userId} — ${user.email}`
+                );
+
+            } catch (logError) {
+
+                console.warn(
+                    "Journal admin message utilisateur:",
+                    logError
+                );
+
+            }
 
 
-            res.status(201).json({
+            return res.status(201).json({
 
                 success: true,
 
-                messageData:
-                    result.rows[0],
-
                 message:
-                    "Message envoyé avec succès"
+                    "Message envoyé avec succès",
+
+                messageData:
+                    result.rows[0]
+
             });
 
 
         } catch (error) {
 
             try {
+
                 await client.query(
                     "ROLLBACK"
                 );
+
             } catch (_) {}
 
 
             console.error(
-                "Erreur message utilisateur:",
+                "ERREUR MESSAGE UTILISATEUR:",
                 error
             );
 
 
-            res.status(500).json({
+            return res.status(500).json({
 
                 success: false,
 
@@ -3775,13 +3944,16 @@ app.post(
 
                 error:
                     error.message
+
             });
 
 
         } finally {
 
             client.release();
+
         }
+
     }
 );
 
@@ -3801,17 +3973,17 @@ app.post(
         try {
 
             const subject =
-                normalizeMessageSubject(
+                safeMessageSubject(
                     req.body?.subject
                 );
 
             const message =
-                normalizeMessageContent(
+                safeMessageContent(
                     req.body?.message
                 );
 
             const priority =
-                normalizeMessagePriority(
+                safeMessagePriority(
                     req.body?.priority
                 );
 
@@ -3819,23 +3991,37 @@ app.post(
             if (!message) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Le message est requis"
+
                 });
+
             }
 
+
+            await client.query(
+                "BEGIN"
+            );
+
+
+            /*
+             * On insère uniquement chez les utilisateurs
+             * non bloqués.
+             */
 
             const users =
                 await client.query(
                     `
-                    SELECT id
+                    SELECT
+                        id
                     FROM users
-                    WHERE
-                        COALESCE(
-                            is_blocked,
-                            FALSE
-                        ) = FALSE
+                    WHERE COALESCE(
+                        is_blocked,
+                        FALSE
+                    ) = FALSE
                     ORDER BY id ASC
                     `
                 );
@@ -3845,18 +4031,22 @@ app.post(
                 users.rows.length === 0
             ) {
 
+                await client.query(
+                    "ROLLBACK"
+                );
+
                 return res.json({
+
                     success: true,
+
                     count: 0,
+
                     message:
                         "Aucun utilisateur disponible"
+
                 });
+
             }
-
-
-            await client.query(
-                "BEGIN"
-            );
 
 
             let count = 0;
@@ -3878,7 +4068,11 @@ app.post(
                         audience,
                         subject,
                         message,
-                        priority
+                        priority,
+                        is_read,
+                        is_archived,
+                        created_at,
+                        updated_at
                     )
                     VALUES
                     (
@@ -3889,7 +4083,11 @@ app.post(
                         'all',
                         $2,
                         $3,
-                        $4
+                        $4,
+                        FALSE,
+                        FALSE,
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP
                     )
                     `,
                     [
@@ -3911,6 +4109,7 @@ app.post(
 
 
                 count++;
+
             }
 
 
@@ -3919,13 +4118,24 @@ app.post(
             );
 
 
-            await logAdminAction(
-                "MESSAGE_GLOBAL",
-                `${count} utilisateurs`
-            );
+            try {
+
+                await logAdminAction(
+                    "MESSAGE_GLOBAL",
+                    `${count} utilisateurs`
+                );
+
+            } catch (logError) {
+
+                console.warn(
+                    "Journal message global:",
+                    logError
+                );
+
+            }
 
 
-            res.status(201).json({
+            return res.status(201).json({
 
                 success: true,
 
@@ -3933,25 +4143,28 @@ app.post(
 
                 message:
                     `Message envoyé à ${count} utilisateurs`
+
             });
 
 
         } catch (error) {
 
             try {
+
                 await client.query(
                     "ROLLBACK"
                 );
+
             } catch (_) {}
 
 
             console.error(
-                "Erreur message global:",
+                "ERREUR MESSAGE GLOBAL:",
                 error
             );
 
 
-            res.status(500).json({
+            return res.status(500).json({
 
                 success: false,
 
@@ -3960,13 +4173,16 @@ app.post(
 
                 error:
                     error.message
+
             });
 
 
         } finally {
 
             client.release();
+
         }
+
     }
 );
 
@@ -3986,18 +4202,18 @@ app.post(
         try {
 
             const subject =
-                normalizeMessageSubject(
+                safeMessageSubject(
                     req.body?.subject ||
                     "Message Premium"
                 );
 
             const message =
-                normalizeMessageContent(
+                safeMessageContent(
                     req.body?.message
                 );
 
             const priority =
-                normalizeMessagePriority(
+                safeMessagePriority(
                     req.body?.priority
                 );
 
@@ -4005,17 +4221,27 @@ app.post(
             if (!message) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Le message est requis"
+
                 });
+
             }
+
+
+            await client.query(
+                "BEGIN"
+            );
 
 
             const users =
                 await client.query(
                     `
-                    SELECT id
+                    SELECT
+                        id
                     FROM users
                     WHERE
                         COALESCE(
@@ -4037,18 +4263,22 @@ app.post(
                 users.rows.length === 0
             ) {
 
+                await client.query(
+                    "ROLLBACK"
+                );
+
                 return res.json({
+
                     success: true,
+
                     count: 0,
+
                     message:
                         "Aucun utilisateur Premium disponible"
+
                 });
+
             }
-
-
-            await client.query(
-                "BEGIN"
-            );
 
 
             let count = 0;
@@ -4070,7 +4300,11 @@ app.post(
                         audience,
                         subject,
                         message,
-                        priority
+                        priority,
+                        is_read,
+                        is_archived,
+                        created_at,
+                        updated_at
                     )
                     VALUES
                     (
@@ -4081,7 +4315,11 @@ app.post(
                         'premium',
                         $2,
                         $3,
-                        $4
+                        $4,
+                        FALSE,
+                        FALSE,
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP
                     )
                     `,
                     [
@@ -4103,6 +4341,7 @@ app.post(
 
 
                 count++;
+
             }
 
 
@@ -4111,13 +4350,24 @@ app.post(
             );
 
 
-            await logAdminAction(
-                "MESSAGE_PREMIUM",
-                `${count} utilisateurs Premium`
-            );
+            try {
+
+                await logAdminAction(
+                    "MESSAGE_PREMIUM",
+                    `${count} utilisateurs Premium`
+                );
+
+            } catch (logError) {
+
+                console.warn(
+                    "Journal message Premium:",
+                    logError
+                );
+
+            }
 
 
-            res.status(201).json({
+            return res.status(201).json({
 
                 success: true,
 
@@ -4125,22 +4375,28 @@ app.post(
 
                 message:
                     `Message envoyé à ${count} Premium`
+
             });
 
 
         } catch (error) {
 
             try {
+
                 await client.query(
                     "ROLLBACK"
                 );
+
             } catch (_) {}
 
 
-            console.error(error);
+            console.error(
+                "ERREUR MESSAGE PREMIUM:",
+                error
+            );
 
 
-            res.status(500).json({
+            return res.status(500).json({
 
                 success: false,
 
@@ -4149,13 +4405,16 @@ app.post(
 
                 error:
                     error.message
+
             });
 
 
         } finally {
 
             client.release();
+
         }
+
     }
 );
 
@@ -4175,17 +4434,17 @@ app.post(
         try {
 
             const subject =
-                normalizeMessageSubject(
+                safeMessageSubject(
                     req.body?.subject
                 );
 
             const message =
-                normalizeMessageContent(
+                safeMessageContent(
                     req.body?.message
                 );
 
             const priority =
-                normalizeMessagePriority(
+                safeMessagePriority(
                     req.body?.priority
                 );
 
@@ -4193,17 +4452,27 @@ app.post(
             if (!message) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Le message est requis"
+
                 });
+
             }
+
+
+            await client.query(
+                "BEGIN"
+            );
 
 
             const users =
                 await client.query(
                     `
-                    SELECT id
+                    SELECT
+                        id
                     FROM users
                     WHERE
                         COALESCE(
@@ -4225,18 +4494,22 @@ app.post(
                 users.rows.length === 0
             ) {
 
+                await client.query(
+                    "ROLLBACK"
+                );
+
                 return res.json({
+
                     success: true,
+
                     count: 0,
+
                     message:
                         "Aucun utilisateur Standard disponible"
+
                 });
+
             }
-
-
-            await client.query(
-                "BEGIN"
-            );
 
 
             let count = 0;
@@ -4258,7 +4531,11 @@ app.post(
                         audience,
                         subject,
                         message,
-                        priority
+                        priority,
+                        is_read,
+                        is_archived,
+                        created_at,
+                        updated_at
                     )
                     VALUES
                     (
@@ -4269,7 +4546,11 @@ app.post(
                         'standard',
                         $2,
                         $3,
-                        $4
+                        $4,
+                        FALSE,
+                        FALSE,
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP
                     )
                     `,
                     [
@@ -4291,6 +4572,7 @@ app.post(
 
 
                 count++;
+
             }
 
 
@@ -4299,13 +4581,24 @@ app.post(
             );
 
 
-            await logAdminAction(
-                "MESSAGE_STANDARD",
-                `${count} utilisateurs Standard`
-            );
+            try {
+
+                await logAdminAction(
+                    "MESSAGE_STANDARD",
+                    `${count} utilisateurs Standard`
+                );
+
+            } catch (logError) {
+
+                console.warn(
+                    "Journal message Standard:",
+                    logError
+                );
+
+            }
 
 
-            res.status(201).json({
+            return res.status(201).json({
 
                 success: true,
 
@@ -4313,22 +4606,28 @@ app.post(
 
                 message:
                     `Message envoyé à ${count} Standard`
+
             });
 
 
         } catch (error) {
 
             try {
+
                 await client.query(
                     "ROLLBACK"
                 );
+
             } catch (_) {}
 
 
-            console.error(error);
+            console.error(
+                "ERREUR MESSAGE STANDARD:",
+                error
+            );
 
 
-            res.status(500).json({
+            return res.status(500).json({
 
                 success: false,
 
@@ -4337,17 +4636,18 @@ app.post(
 
                 error:
                     error.message
+
             });
 
 
         } finally {
 
             client.release();
+
         }
+
     }
 );
-
-
 /* ============================================================
    CONVERSATION ADMIN
 ============================================================ */
