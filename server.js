@@ -3544,51 +3544,13 @@ app.get(
    MESSAGES — UTILITAIRES
 ============================================================ */
 
-/*
- * Convertit la priorité du message en type de notification
- * compatible avec la table notifications.
- *
- * Priorités message :
- * normal / important / urgent
- *
- * Types notification :
- * info / warning / error
- */
-function getNotificationTypeFromPriority(priority) {
-
-    const value =
-        String(priority || "normal")
-            .trim()
-            .toLowerCase();
-
-    if (value === "urgent") {
-        return "error";
-    }
-
-    if (value === "important") {
-        return "warning";
-    }
-
-    return "info";
-}
-
-
-/* ============================================================
-   NOTIFICATION
-============================================================ */
-
 async function createNotification(
     client,
     userId,
     title,
     message,
-    priority = "normal"
+    type = "info"
 ) {
-
-    const notificationType =
-        getNotificationTypeFromPriority(
-            priority
-        );
 
     await client.query(
         `
@@ -3608,68 +3570,13 @@ async function createNotification(
         )
         `,
         [
-            Number(userId),
-            String(title || "Message BMJ SERVICE"),
-            String(message || ""),
-            notificationType
+            userId,
+            title,
+            message,
+            type
         ]
     );
-}
 
-
-/* ============================================================
-   NORMALISATION MESSAGE
-============================================================ */
-
-function safeMessageSubject(value) {
-
-    const subject =
-        String(value || "")
-            .trim();
-
-    if (!subject) {
-        return "Message BMJ SERVICE";
-    }
-
-    return subject.substring(
-        0,
-        255
-    );
-}
-
-
-function safeMessageContent(value) {
-
-    return String(
-        value || ""
-    ).trim();
-}
-
-
-function safeMessagePriority(value) {
-
-    const allowed = [
-        "normal",
-        "important",
-        "urgent"
-    ];
-
-    const priority =
-        String(value || "normal")
-            .trim()
-            .toLowerCase();
-
-    if (
-        allowed.includes(
-            priority
-        )
-    ) {
-
-        return priority;
-
-    }
-
-    return "normal";
 }
 
 
@@ -3693,29 +3600,23 @@ app.post(
                 );
 
             const subject =
-                safeMessageSubject(
+                normalizeMessageSubject(
                     req.body?.subject
                 );
 
             const message =
-                safeMessageContent(
+                normalizeMessageContent(
                     req.body?.message
                 );
 
             const priority =
-                safeMessagePriority(
+                normalizeMessagePriority(
                     req.body?.priority
                 );
 
 
-            /* ------------------------------------------------
-               VALIDATION
-            ------------------------------------------------ */
-
             if (
-                !Number.isInteger(
-                    userId
-                ) ||
+                !Number.isInteger(userId) ||
                 userId <= 0
             ) {
 
@@ -3744,10 +3645,6 @@ app.post(
 
             }
 
-
-            /* ------------------------------------------------
-               VERIFICATION UTILISATEUR
-            ------------------------------------------------ */
 
             const userResult =
                 await client.query(
@@ -3783,14 +3680,8 @@ app.post(
             }
 
 
-            const user =
-                userResult.rows[0];
-
-
             if (
-                Boolean(
-                    user.is_blocked
-                )
+                userResult.rows[0].is_blocked
             ) {
 
                 return res.status(403).json({
@@ -3805,18 +3696,10 @@ app.post(
             }
 
 
-            /* ------------------------------------------------
-               TRANSACTION
-            ------------------------------------------------ */
-
             await client.query(
                 "BEGIN"
             );
 
-
-            /* ------------------------------------------------
-               INSERT MESSAGE
-            ------------------------------------------------ */
 
             const result =
                 await client.query(
@@ -3830,11 +3713,7 @@ app.post(
                         audience,
                         subject,
                         message,
-                        priority,
-                        is_read,
-                        is_archived,
-                        created_at,
-                        updated_at
+                        priority
                     )
                     VALUES
                     (
@@ -3845,11 +3724,7 @@ app.post(
                         'individual',
                         $2,
                         $3,
-                        $4,
-                        FALSE,
-                        FALSE,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
+                        $4
                     )
                     RETURNING *
                     `,
@@ -3862,9 +3737,11 @@ app.post(
                 );
 
 
-            /* ------------------------------------------------
-               NOTIFICATION
-            ------------------------------------------------ */
+            /*
+             * IMPORTANT :
+             * On conserve la priorité comme type de notification,
+             * exactement comme dans ton système actuel.
+             */
 
             await createNotification(
                 client,
@@ -3875,31 +3752,23 @@ app.post(
             );
 
 
-            /* ------------------------------------------------
-               VALIDATION TRANSACTION
-            ------------------------------------------------ */
-
             await client.query(
                 "COMMIT"
             );
 
 
-            /* ------------------------------------------------
-               JOURNAL ADMIN
-            ------------------------------------------------ */
-
             try {
 
                 await logAdminAction(
                     "MESSAGE_UTILISATEUR",
-                    `Message envoyé à ${userId} — ${user.email}`
+                    `Message envoyé à l'utilisateur ${userId}`
                 );
 
             } catch (logError) {
 
                 console.warn(
-                    "Journal admin message utilisateur:",
-                    logError
+                    "Erreur journal admin :",
+                    logError.message
                 );
 
             }
@@ -3909,11 +3778,11 @@ app.post(
 
                 success: true,
 
-                message:
-                    "Message envoyé avec succès",
-
                 messageData:
-                    result.rows[0]
+                    result.rows[0],
+
+                message:
+                    "Message envoyé avec succès"
 
             });
 
@@ -3930,7 +3799,7 @@ app.post(
 
 
             console.error(
-                "ERREUR MESSAGE UTILISATEUR:",
+                "Erreur message utilisateur:",
                 error
             );
 
@@ -3973,17 +3842,17 @@ app.post(
         try {
 
             const subject =
-                safeMessageSubject(
+                normalizeMessageSubject(
                     req.body?.subject
                 );
 
             const message =
-                safeMessageContent(
+                normalizeMessageContent(
                     req.body?.message
                 );
 
             const priority =
-                safeMessagePriority(
+                normalizeMessagePriority(
                     req.body?.priority
                 );
 
@@ -4002,26 +3871,16 @@ app.post(
             }
 
 
-            await client.query(
-                "BEGIN"
-            );
-
-
-            /*
-             * On insère uniquement chez les utilisateurs
-             * non bloqués.
-             */
-
             const users =
                 await client.query(
                     `
-                    SELECT
-                        id
+                    SELECT id
                     FROM users
-                    WHERE COALESCE(
-                        is_blocked,
-                        FALSE
-                    ) = FALSE
+                    WHERE
+                        COALESCE(
+                            is_blocked,
+                            FALSE
+                        ) = FALSE
                     ORDER BY id ASC
                     `
                 );
@@ -4030,10 +3889,6 @@ app.post(
             if (
                 users.rows.length === 0
             ) {
-
-                await client.query(
-                    "ROLLBACK"
-                );
 
                 return res.json({
 
@@ -4047,6 +3902,11 @@ app.post(
                 });
 
             }
+
+
+            await client.query(
+                "BEGIN"
+            );
 
 
             let count = 0;
@@ -4068,11 +3928,7 @@ app.post(
                         audience,
                         subject,
                         message,
-                        priority,
-                        is_read,
-                        is_archived,
-                        created_at,
-                        updated_at
+                        priority
                     )
                     VALUES
                     (
@@ -4083,11 +3939,7 @@ app.post(
                         'all',
                         $2,
                         $3,
-                        $4,
-                        FALSE,
-                        FALSE,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
+                        $4
                     )
                     `,
                     [
@@ -4128,8 +3980,8 @@ app.post(
             } catch (logError) {
 
                 console.warn(
-                    "Journal message global:",
-                    logError
+                    "Erreur journal global:",
+                    logError.message
                 );
 
             }
@@ -4159,7 +4011,7 @@ app.post(
 
 
             console.error(
-                "ERREUR MESSAGE GLOBAL:",
+                "Erreur message global:",
                 error
             );
 
@@ -4202,18 +4054,18 @@ app.post(
         try {
 
             const subject =
-                safeMessageSubject(
+                normalizeMessageSubject(
                     req.body?.subject ||
                     "Message Premium"
                 );
 
             const message =
-                safeMessageContent(
+                normalizeMessageContent(
                     req.body?.message
                 );
 
             const priority =
-                safeMessagePriority(
+                normalizeMessagePriority(
                     req.body?.priority
                 );
 
@@ -4232,28 +4084,20 @@ app.post(
             }
 
 
-            await client.query(
-                "BEGIN"
-            );
-
-
             const users =
                 await client.query(
                     `
-                    SELECT
-                        id
+                    SELECT id
                     FROM users
                     WHERE
                         COALESCE(
                             is_premium,
                             FALSE
                         ) = TRUE
-
                         AND COALESCE(
                             is_blocked,
                             FALSE
                         ) = FALSE
-
                     ORDER BY id ASC
                     `
                 );
@@ -4262,10 +4106,6 @@ app.post(
             if (
                 users.rows.length === 0
             ) {
-
-                await client.query(
-                    "ROLLBACK"
-                );
 
                 return res.json({
 
@@ -4279,6 +4119,11 @@ app.post(
                 });
 
             }
+
+
+            await client.query(
+                "BEGIN"
+            );
 
 
             let count = 0;
@@ -4300,11 +4145,7 @@ app.post(
                         audience,
                         subject,
                         message,
-                        priority,
-                        is_read,
-                        is_archived,
-                        created_at,
-                        updated_at
+                        priority
                     )
                     VALUES
                     (
@@ -4315,11 +4156,7 @@ app.post(
                         'premium',
                         $2,
                         $3,
-                        $4,
-                        FALSE,
-                        FALSE,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
+                        $4
                     )
                     `,
                     [
@@ -4360,8 +4197,8 @@ app.post(
             } catch (logError) {
 
                 console.warn(
-                    "Journal message Premium:",
-                    logError
+                    "Erreur journal Premium:",
+                    logError.message
                 );
 
             }
@@ -4391,7 +4228,7 @@ app.post(
 
 
             console.error(
-                "ERREUR MESSAGE PREMIUM:",
+                "Erreur message Premium:",
                 error
             );
 
@@ -4434,17 +4271,17 @@ app.post(
         try {
 
             const subject =
-                safeMessageSubject(
+                normalizeMessageSubject(
                     req.body?.subject
                 );
 
             const message =
-                safeMessageContent(
+                normalizeMessageContent(
                     req.body?.message
                 );
 
             const priority =
-                safeMessagePriority(
+                normalizeMessagePriority(
                     req.body?.priority
                 );
 
@@ -4463,28 +4300,20 @@ app.post(
             }
 
 
-            await client.query(
-                "BEGIN"
-            );
-
-
             const users =
                 await client.query(
                     `
-                    SELECT
-                        id
+                    SELECT id
                     FROM users
                     WHERE
                         COALESCE(
                             is_premium,
                             FALSE
                         ) = FALSE
-
                         AND COALESCE(
                             is_blocked,
                             FALSE
                         ) = FALSE
-
                     ORDER BY id ASC
                     `
                 );
@@ -4493,10 +4322,6 @@ app.post(
             if (
                 users.rows.length === 0
             ) {
-
-                await client.query(
-                    "ROLLBACK"
-                );
 
                 return res.json({
 
@@ -4510,6 +4335,11 @@ app.post(
                 });
 
             }
+
+
+            await client.query(
+                "BEGIN"
+            );
 
 
             let count = 0;
@@ -4531,11 +4361,7 @@ app.post(
                         audience,
                         subject,
                         message,
-                        priority,
-                        is_read,
-                        is_archived,
-                        created_at,
-                        updated_at
+                        priority
                     )
                     VALUES
                     (
@@ -4546,11 +4372,7 @@ app.post(
                         'standard',
                         $2,
                         $3,
-                        $4,
-                        FALSE,
-                        FALSE,
-                        CURRENT_TIMESTAMP,
-                        CURRENT_TIMESTAMP
+                        $4
                     )
                     `,
                     [
@@ -4591,8 +4413,8 @@ app.post(
             } catch (logError) {
 
                 console.warn(
-                    "Journal message Standard:",
-                    logError
+                    "Erreur journal Standard:",
+                    logError.message
                 );
 
             }
@@ -4622,7 +4444,7 @@ app.post(
 
 
             console.error(
-                "ERREUR MESSAGE STANDARD:",
+                "Erreur message Standard:",
                 error
             );
 
