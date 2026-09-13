@@ -3576,7 +3576,6 @@ async function createNotification(
             type
         ]
     );
-
 }
 
 
@@ -3621,28 +3620,20 @@ app.post(
             ) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Utilisateur invalide"
-
                 });
-
             }
 
 
             if (!message) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Le message est requis"
-
                 });
-
             }
 
 
@@ -3658,9 +3649,7 @@ app.post(
                     FROM users
                     WHERE id = $1
                     `,
-                    [
-                        userId
-                    ]
+                    [userId]
                 );
 
 
@@ -3669,30 +3658,23 @@ app.post(
             ) {
 
                 return res.status(404).json({
-
                     success: false,
-
                     message:
                         "Utilisateur introuvable"
-
                 });
-
             }
 
 
             if (
-                userResult.rows[0].is_blocked
+                userResult.rows[0]
+                    .is_blocked
             ) {
 
                 return res.status(403).json({
-
                     success: false,
-
                     message:
                         "Impossible d'envoyer un message à un utilisateur bloqué"
-
                 });
-
             }
 
 
@@ -3737,12 +3719,6 @@ app.post(
                 );
 
 
-            /*
-             * IMPORTANT :
-             * On conserve la priorité comme type de notification,
-             * exactement comme dans ton système actuel.
-             */
-
             await createNotification(
                 client,
                 userId,
@@ -3757,24 +3733,13 @@ app.post(
             );
 
 
-            try {
-
-                await logAdminAction(
-                    "MESSAGE_UTILISATEUR",
-                    `Message envoyé à l'utilisateur ${userId}`
-                );
-
-            } catch (logError) {
-
-                console.warn(
-                    "Erreur journal admin :",
-                    logError.message
-                );
-
-            }
+            await logAdminAction(
+                "MESSAGE_UTILISATEUR",
+                `Message envoyé à l'utilisateur ${userId}`
+            );
 
 
-            return res.status(201).json({
+            res.status(201).json({
 
                 success: true,
 
@@ -3783,18 +3748,15 @@ app.post(
 
                 message:
                     "Message envoyé avec succès"
-
             });
 
 
         } catch (error) {
 
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
             } catch (_) {}
 
 
@@ -3804,7 +3766,7 @@ app.post(
             );
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
@@ -3813,16 +3775,13 @@ app.post(
 
                 error:
                     error.message
-
             });
 
 
         } finally {
 
             client.release();
-
         }
-
     }
 );
 
@@ -3860,14 +3819,10 @@ app.post(
             if (!message) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Le message est requis"
-
                 });
-
             }
 
 
@@ -3891,16 +3846,11 @@ app.post(
             ) {
 
                 return res.json({
-
                     success: true,
-
                     count: 0,
-
                     message:
                         "Aucun utilisateur disponible"
-
                 });
-
             }
 
 
@@ -3961,7 +3911,6 @@ app.post(
 
 
                 count++;
-
             }
 
 
@@ -3970,24 +3919,13 @@ app.post(
             );
 
 
-            try {
-
-                await logAdminAction(
-                    "MESSAGE_GLOBAL",
-                    `${count} utilisateurs`
-                );
-
-            } catch (logError) {
-
-                console.warn(
-                    "Erreur journal global:",
-                    logError.message
-                );
-
-            }
+            await logAdminAction(
+                "MESSAGE_GLOBAL",
+                `${count} utilisateurs`
+            );
 
 
-            return res.status(201).json({
+            res.status(201).json({
 
                 success: true,
 
@@ -3995,18 +3933,15 @@ app.post(
 
                 message:
                     `Message envoyé à ${count} utilisateurs`
-
             });
 
 
         } catch (error) {
 
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
             } catch (_) {}
 
 
@@ -4016,7 +3951,7 @@ app.post(
             );
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
@@ -4025,16 +3960,13 @@ app.post(
 
                 error:
                     error.message
-
             });
 
 
         } finally {
 
             client.release();
-
         }
-
     }
 );
 
@@ -4073,14 +4005,10 @@ app.post(
             if (!message) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Le message est requis"
-
                 });
-
             }
 
 
@@ -4094,10 +4022,12 @@ app.post(
                             is_premium,
                             FALSE
                         ) = TRUE
+
                         AND COALESCE(
                             is_blocked,
                             FALSE
                         ) = FALSE
+
                     ORDER BY id ASC
                     `
                 );
@@ -4108,16 +4038,11 @@ app.post(
             ) {
 
                 return res.json({
-
                     success: true,
-
                     count: 0,
-
                     message:
                         "Aucun utilisateur Premium disponible"
-
                 });
-
             }
 
 
@@ -4178,7 +4103,6 @@ app.post(
 
 
                 count++;
-
             }
 
 
@@ -4187,24 +4111,13 @@ app.post(
             );
 
 
-            try {
-
-                await logAdminAction(
-                    "MESSAGE_PREMIUM",
-                    `${count} utilisateurs Premium`
-                );
-
-            } catch (logError) {
-
-                console.warn(
-                    "Erreur journal Premium:",
-                    logError.message
-                );
-
-            }
+            await logAdminAction(
+                "MESSAGE_PREMIUM",
+                `${count} utilisateurs Premium`
+            );
 
 
-            return res.status(201).json({
+            res.status(201).json({
 
                 success: true,
 
@@ -4212,28 +4125,22 @@ app.post(
 
                 message:
                     `Message envoyé à ${count} Premium`
-
             });
 
 
         } catch (error) {
 
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
             } catch (_) {}
 
 
-            console.error(
-                "Erreur message Premium:",
-                error
-            );
+            console.error(error);
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
@@ -4242,16 +4149,13 @@ app.post(
 
                 error:
                     error.message
-
             });
 
 
         } finally {
 
             client.release();
-
         }
-
     }
 );
 
@@ -4289,14 +4193,10 @@ app.post(
             if (!message) {
 
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Le message est requis"
-
                 });
-
             }
 
 
@@ -4310,10 +4210,12 @@ app.post(
                             is_premium,
                             FALSE
                         ) = FALSE
+
                         AND COALESCE(
                             is_blocked,
                             FALSE
                         ) = FALSE
+
                     ORDER BY id ASC
                     `
                 );
@@ -4324,16 +4226,11 @@ app.post(
             ) {
 
                 return res.json({
-
                     success: true,
-
                     count: 0,
-
                     message:
                         "Aucun utilisateur Standard disponible"
-
                 });
-
             }
 
 
@@ -4394,7 +4291,6 @@ app.post(
 
 
                 count++;
-
             }
 
 
@@ -4403,24 +4299,13 @@ app.post(
             );
 
 
-            try {
-
-                await logAdminAction(
-                    "MESSAGE_STANDARD",
-                    `${count} utilisateurs Standard`
-                );
-
-            } catch (logError) {
-
-                console.warn(
-                    "Erreur journal Standard:",
-                    logError.message
-                );
-
-            }
+            await logAdminAction(
+                "MESSAGE_STANDARD",
+                `${count} utilisateurs Standard`
+            );
 
 
-            return res.status(201).json({
+            res.status(201).json({
 
                 success: true,
 
@@ -4428,28 +4313,22 @@ app.post(
 
                 message:
                     `Message envoyé à ${count} Standard`
-
             });
 
 
         } catch (error) {
 
             try {
-
                 await client.query(
                     "ROLLBACK"
                 );
-
             } catch (_) {}
 
 
-            console.error(
-                "Erreur message Standard:",
-                error
-            );
+            console.error(error);
 
 
-            return res.status(500).json({
+            res.status(500).json({
 
                 success: false,
 
@@ -4458,18 +4337,17 @@ app.post(
 
                 error:
                     error.message
-
             });
 
 
         } finally {
 
             client.release();
-
         }
-
     }
 );
+
+
 /* ============================================================
    CONVERSATION ADMIN
 ============================================================ */
