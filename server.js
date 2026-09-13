@@ -1459,6 +1459,10 @@ app.get(
     async (req, res) => {
 
         console.log(
+            "[ADMIN STATS] ======================================="
+        );
+
+        console.log(
             "[ADMIN STATS] Début récupération statistiques"
         );
 
@@ -1483,11 +1487,12 @@ app.get(
             certificates: 0,
             certificates_authorized: 0,
             authorizedCertificates: 0
+
         };
 
 
         /* =====================================================
-           UTILISATEURS
+           1. UTILISATEURS
         ===================================================== */
 
         try {
@@ -1525,14 +1530,7 @@ app.get(
                                 FALSE
                             ) = TRUE
                         )::INTEGER
-                            AS blocked,
-
-                        COUNT(*)
-                        FILTER (
-                            WHERE created_at >= CURRENT_DATE
-                            AND created_at < CURRENT_DATE + INTERVAL '1 day'
-                        )::INTEGER
-                            AS today
+                            AS blocked
 
                     FROM users
                     `
@@ -1544,48 +1542,143 @@ app.get(
 
 
             stats.users =
-                Number(row.users || 0);
+                Number(
+                    row.users || 0
+                );
 
 
             stats.premium =
-                Number(row.premium || 0);
+                Number(
+                    row.premium || 0
+                );
 
 
             stats.standard =
-                Number(row.standard || 0);
+                Number(
+                    row.standard || 0
+                );
 
 
             stats.blocked =
-                Number(row.blocked || 0);
-
-
-            stats.today =
-                Number(row.today || 0);
+                Number(
+                    row.blocked || 0
+                );
 
 
             console.log(
-                "[ADMIN STATS] Utilisateurs :",
+                "[ADMIN STATS] Utilisateurs OK :",
                 {
                     users: stats.users,
                     premium: stats.premium,
                     standard: stats.standard,
-                    blocked: stats.blocked,
-                    today: stats.today
+                    blocked: stats.blocked
                 }
             );
 
 
-        } catch (error) {
+        }
+
+        catch (error) {
 
             console.error(
-                "[ADMIN STATS] users:",
-                error.message
+                "[ADMIN STATS] ERREUR USERS :",
+                error
             );
+
         }
 
 
         /* =====================================================
-           PAIEMENTS
+           2. NOUVEAUX UTILISATEURS AUJOURD'HUI
+        ===================================================== */
+
+        try {
+
+            /*
+             * On vérifie d'abord que created_at
+             * existe réellement dans la table users.
+             */
+
+            const columnResult =
+                await pool.query(
+                    `
+                    SELECT
+                        column_name,
+                        data_type
+                    FROM information_schema.columns
+                    WHERE table_name = 'users'
+                    AND column_name = 'created_at'
+                    LIMIT 1
+                    `
+                );
+
+
+            if (
+                columnResult.rows.length === 0
+            ) {
+
+                console.warn(
+                    "[ADMIN STATS] ⚠ La colonne users.created_at n'existe pas."
+                );
+
+
+                stats.today = 0;
+
+            }
+
+            else {
+
+                /*
+                 * CURRENT_DATE correspond à la date
+                 * du serveur PostgreSQL.
+                 *
+                 * On utilise CAST(created_at AS DATE)
+                 * pour supporter timestamp/timestamptz.
+                 */
+
+                const todayResult =
+                    await pool.query(
+                        `
+                        SELECT
+                            COUNT(*)::INTEGER AS today
+                        FROM users
+                        WHERE created_at::DATE =
+                              CURRENT_DATE
+                        `
+                    );
+
+
+                stats.today =
+                    Number(
+                        todayResult.rows[0]?.today || 0
+                    );
+
+
+                console.log(
+                    "[ADMIN STATS] Nouveaux utilisateurs aujourd'hui :",
+                    stats.today
+                );
+
+            }
+
+
+        }
+
+        catch (error) {
+
+            console.error(
+                "[ADMIN STATS] ERREUR TODAY :",
+                error
+            );
+
+
+            stats.today = 0;
+
+        }
+
+
+        /* =====================================================
+           3. PAIEMENTS
         ===================================================== */
 
         try {
@@ -1601,15 +1694,25 @@ app.get(
                         COUNT(*)
                         FILTER (
                             WHERE LOWER(
-                                COALESCE(statut, '')
-                            ) = 'pending'
+                                COALESCE(
+                                    statut,
+                                    ''
+                                )
+                            ) IN (
+                                'pending',
+                                'en_attente',
+                                'en attente'
+                            )
                         )::INTEGER
                             AS pending,
 
                         COUNT(*)
                         FILTER (
                             WHERE LOWER(
-                                COALESCE(statut, '')
+                                COALESCE(
+                                    statut,
+                                    ''
+                                )
                             ) IN (
                                 'valide',
                                 'validated',
@@ -1622,7 +1725,10 @@ app.get(
                         COUNT(*)
                         FILTER (
                             WHERE LOWER(
-                                COALESCE(statut, '')
+                                COALESCE(
+                                    statut,
+                                    ''
+                                )
                             ) IN (
                                 'refuse',
                                 'refused',
@@ -1664,40 +1770,67 @@ app.get(
 
 
             stats.payments =
-                Number(row.total || 0);
+                Number(
+                    row.total || 0
+                );
 
 
             stats.totalPayments =
-                Number(row.total || 0);
+                Number(
+                    row.total || 0
+                );
 
 
             stats.pending =
-                Number(row.pending || 0);
+                Number(
+                    row.pending || 0
+                );
 
 
             stats.validated =
-                Number(row.validated || 0);
+                Number(
+                    row.validated || 0
+                );
 
 
             stats.refused =
-                Number(row.refused || 0);
+                Number(
+                    row.refused || 0
+                );
 
 
             stats.revenue =
-                Number(row.revenue || 0);
+                Number(
+                    row.revenue || 0
+                );
 
 
-        } catch (error) {
+            console.log(
+                "[ADMIN STATS] Paiements OK :",
+                {
+                    total: stats.totalPayments,
+                    pending: stats.pending,
+                    validated: stats.validated,
+                    refused: stats.refused,
+                    revenue: stats.revenue
+                }
+            );
+
+
+        }
+
+        catch (error) {
 
             console.error(
-                "[ADMIN STATS] payments:",
-                error.message
+                "[ADMIN STATS] ERREUR PAYMENTS :",
+                error
             );
+
         }
 
 
         /* =====================================================
-           MESSAGES
+           4. MESSAGES
         ===================================================== */
 
         try {
@@ -1718,17 +1851,25 @@ app.get(
                 );
 
 
-        } catch (error) {
+            console.log(
+                "[ADMIN STATS] Messages :",
+                stats.messages
+            );
+
+        }
+
+        catch (error) {
 
             console.error(
-                "[ADMIN STATS] messages:",
-                error.message
+                "[ADMIN STATS] ERREUR MESSAGES :",
+                error
             );
+
         }
 
 
         /* =====================================================
-           CERTIFICATS
+           5. CERTIFICATS
         ===================================================== */
 
         try {
@@ -1771,44 +1912,63 @@ app.get(
                 stats.certificates_authorized;
 
 
-        } catch (error) {
+            console.log(
+                "[ADMIN STATS] Certificats :",
+                {
+                    total: stats.certificates,
+                    authorized:
+                        stats.authorizedCertificates
+                }
+            );
+
+        }
+
+        catch (error) {
 
             console.error(
-                "[ADMIN STATS] certificates:",
-                error.message
+                "[ADMIN STATS] ERREUR CERTIFICATES :",
+                error
             );
+
         }
 
 
+        /* =====================================================
+           6. RÉSULTAT FINAL
+        ===================================================== */
+
         console.log(
-            "[ADMIN STATS] Résultat final :",
-            stats
+            "[ADMIN STATS] RÉSULTAT FINAL :",
+            JSON.stringify(
+                stats,
+                null,
+                2
+            )
         );
 
 
         /* =====================================================
-           RÉPONSE API
+           7. RÉPONSE
         ===================================================== */
 
-        return res.json({
+        return res.status(200).json({
 
             success: true,
 
-            /*
-             * Format principal utilisé par le frontend
-             */
             stats: stats,
 
-            /*
-             * Compatibilité avec ton ancien frontend
-             */
             statistiques: stats,
+
+            statistics: stats,
+
+            data: stats,
 
             message:
                 "Statistiques récupérées avec succès",
 
             generated_at:
                 new Date().toISOString()
+
         });
 
     }
