@@ -108,7 +108,7 @@ app.use(
     (req, res, next) => {
 
         console.log(
-            `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
+            `[]  `
         );
 
         next();
@@ -395,7 +395,7 @@ async function logAdminAction(
                 details
             )
             VALUES
-            ($1, $2, $3)
+            (, , )
             `,
             [
                 action,
@@ -547,7 +547,7 @@ async function initDatabase() {
                 `
                 ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS
-                ${column} ${type}
+                 
                 `
             );
         }
@@ -631,7 +631,7 @@ async function initDatabase() {
                 `
                 ALTER TABLE demandes_paiement
                 ADD COLUMN IF NOT EXISTS
-                ${column} ${type}
+                 
                 `
             );
         }
@@ -800,7 +800,7 @@ async function initDatabase() {
                 `
                 ALTER TABLE messages
                 ADD COLUMN IF NOT EXISTS
-                ${column} ${type}
+                 
                 `
             );
         }
@@ -933,7 +933,7 @@ async function initDatabase() {
                 `
                 ALTER TABLE certificates
                 ADD COLUMN IF NOT EXISTS
-                ${column} ${type}
+                 
                 `
             );
         }
