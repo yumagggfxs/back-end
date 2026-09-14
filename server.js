@@ -114,7 +114,49 @@ app.use(
         next();
     }
 );
+/* ============================================================
+   INITIALISATION DE LA PROGRESSION DES UTILISATEURS
+============================================================ */
 
+async function initializeUsersProgression() {
+
+    try {
+
+        const result =
+            await pool.query(
+                `
+                UPDATE users
+
+                SET
+                    progression = 50,
+                    updated_at =
+                        CURRENT_TIMESTAMP
+
+                WHERE
+                    progression IS NULL
+                    OR progression < 0
+                    OR progression > 100
+
+                RETURNING id
+                `
+            );
+
+
+        console.log(
+            `[PROGRESSION] ${result.rowCount} utilisateur(s) initialisé(s) à 50%.`
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "[PROGRESSION] Erreur initialisation :",
+            error
+        );
+
+    }
+
+}
 
 /* ============================================================
    OUTILS
@@ -2989,6 +3031,20 @@ app.patch(
                 );
 
 
+            if (
+                !Number.isInteger(id) ||
+                id <= 0
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Identifiant utilisateur invalide"
+                });
+
+            }
+
+
             const progression =
                 clampProgress(
                     req.body?.progression
@@ -2999,10 +3055,12 @@ app.patch(
                 await pool.query(
                     `
                     UPDATE users
+
                     SET
                         progression = $1,
                         updated_at =
                             CURRENT_TIMESTAMP
+
                     WHERE id = $2
 
                     RETURNING
@@ -3025,181 +3083,59 @@ app.patch(
                     message:
                         "Utilisateur introuvable"
                 });
+
             }
+
+
+            const statut =
+                progression >= 100
+                    ? "Terminé"
+                    : "En cours";
 
 
             await logAdminAction(
                 "MODIFICATION_PROGRESSION",
-                `Utilisateur ${id} : ${progression}%`
+                `Utilisateur ${id} : ${progression}% (${statut})`
             );
 
 
-            res.json({
+            return res.json({
 
                 success: true,
 
-                user:
-                    result.rows[0],
+                user: {
+                    id:
+                        result.rows[0].id,
+
+                    progression:
+                        result.rows[0].progression,
+
+                    statut:
+                        statut
+                },
 
                 message:
-                    "Progression mise à jour"
+                    "Progression globale mise à jour"
+
             });
 
 
         } catch (error) {
 
-            console.error(error);
+            console.error(
+                "[PROGRESSION GLOBALE]",
+                error
+            );
 
-            res.status(500).json({
+
+            return res.status(500).json({
                 success: false,
                 message:
                     "Erreur progression"
             });
+
         }
-    }
-);
 
-
-/* ============================================================
-   PROGRESSION PAR DOMAINE
-============================================================ */
-
-app.patch(
-    "/api/admin/users/:id/progression/domaine",
-    adminAuth,
-    async (req, res) => {
-
-        try {
-
-            const userId =
-                Number(
-                    req.params.id
-                );
-
-            const domaine =
-                clean(
-                    req.body?.domaine
-                );
-
-            const progression =
-                clampProgress(
-                    req.body?.progression
-                );
-
-            const chapitreActuel =
-                safeNumber(
-                    req.body?.chapitre_actuel,
-                    0
-                );
-
-            const chapitreTotal =
-                safeNumber(
-                    req.body?.chapitre_total,
-                    0
-                );
-
-            const statut =
-                progression >= 100
-                    ? "termine"
-                    : "en_cours";
-
-
-            if (
-                !Number.isInteger(userId) ||
-                userId <= 0 ||
-                !domaine
-            ) {
-
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Utilisateur ou domaine invalide"
-                });
-            }
-
-
-            const result =
-                await pool.query(
-                    `
-                    INSERT INTO user_progress
-                    (
-                        user_id,
-                        domaine,
-                        progression,
-                        chapitre_actuel,
-                        chapitre_total,
-                        statut,
-                        updated_at
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4,
-                        $5,
-                        $6,
-                        CURRENT_TIMESTAMP
-                    )
-
-                    ON CONFLICT
-                    (
-                        user_id,
-                        domaine
-                    )
-
-                    DO UPDATE SET
-
-                        progression =
-                            EXCLUDED.progression,
-
-                        chapitre_actuel =
-                            EXCLUDED.chapitre_actuel,
-
-                        chapitre_total =
-                            EXCLUDED.chapitre_total,
-
-                        statut =
-                            EXCLUDED.statut,
-
-                        updated_at =
-                            CURRENT_TIMESTAMP
-
-                    RETURNING *
-                    `,
-                    [
-                        userId,
-                        domaine,
-                        progression,
-                        chapitreActuel,
-                        chapitreTotal,
-                        statut
-                    ]
-                );
-
-
-            res.json({
-
-                success: true,
-
-                progress:
-                    result.rows[0],
-
-                message:
-                    "Progression du domaine mise à jour"
-            });
-
-
-        } catch (error) {
-
-            console.error(error);
-
-            res.status(500).json({
-                success: false,
-                message:
-                    "Erreur progression domaine"
-            });
-        }
     }
 );
 
