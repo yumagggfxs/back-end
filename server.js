@@ -6466,23 +6466,59 @@ app.get(
 ============================================================ */
 
 /*
- * Cette route est destinée à la page de vérification Premium.
+ * IMPORTANT
  *
- * Règle :
+ * La vérification Premium possède sa propre progression.
  *
- * - compte non Premium => progression inchangée
- * - compte Premium => vérification terminée
- *                         progression = 100%
+ * Progression générale :
  *
- * La progression est enregistrée dans PostgreSQL.
- */
+ *     users.progression
+ *
+ * Progression vérification Premium :
+ *
+ *     users.premium_verification_progression
+ *
+ *
+ * Règles :
+ *
+ * NON PREMIUM :
+ *
+ *     premium_verification_progression = 50
+ *     premium_verification_completed = false
+ *
+ *
+ * PREMIUM :
+ *
+ *     premium_verification_progression = 100
+ *     premium_verification_completed = true
+ *
+ *
+ * La progression générale de l'utilisateur
+ * N'EST PAS MODIFIÉE par ces routes.
+ *
+ *
+ * ADMIN :
+ *
+ *     50  -> En cours
+ *     100 -> Terminé
+============================================================ */
+
+
+/* ============================================================
+   GET
+   /api/users/:id/premium-verification
+
+   Vérifie l'état actuel de la vérification Premium.
+
+   IMPORTANT :
+   Cette route ne modifie pas la progression générale.
+============================================================ */
 
 app.get(
     "/api/users/:id/premium-verification",
     async (req, res) => {
 
-        const client =
-            await pool.connect();
+        let client = null;
 
         try {
 
@@ -6490,6 +6526,11 @@ app.get(
                 Number(
                     req.params.id
                 );
+
+
+            /* =================================================
+               VALIDATION ID
+            ================================================= */
 
             if (
                 !Number.isInteger(userId) ||
@@ -6501,13 +6542,20 @@ app.get(
                     success: false,
 
                     message:
-                        "Identifiant utilisateur invalide"
+                        "Identifiant utilisateur invalide."
+
                 });
+
             }
 
-            await client.query(
-                "BEGIN"
-            );
+
+            client =
+                await pool.connect();
+
+
+            /* =================================================
+               RECUPERER UTILISATEUR
+            ================================================= */
 
             const result =
                 await client.query(
@@ -6519,13 +6567,406 @@ app.get(
                         is_premium,
                         is_blocked,
                         progression,
-                        premium_until
+                        premium_until,
+                        premium_verification_progression,
+                        premium_verification_completed,
+                        updated_at
+
                     FROM users
+
                     WHERE id = $1
+
+                    LIMIT 1
+                    `,
+                    [
+                        userId
+                    ]
+                );
+
+
+            /* =================================================
+               UTILISATEUR INTROUVABLE
+            ================================================= */
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable."
+
+                });
+
+            }
+
+
+            const user =
+                result.rows[0];
+
+
+            /* =================================================
+               STATUT PREMIUM
+            ================================================= */
+
+            const isPremium =
+                user.is_premium === true ||
+                user.is_premium === "true" ||
+                user.is_premium === 1 ||
+                user.is_premium === "1";
+
+
+            /* =================================================
+               PROGRESSION PREMIUM
+            ================================================= */
+
+            let premiumProgress =
+                Number(
+                    user.premium_verification_progression
+                );
+
+
+            if (
+                !Number.isFinite(
+                    premiumProgress
+                )
+            ) {
+
+                premiumProgress =
+                    isPremium
+                        ? 100
+                        : 50;
+
+            }
+
+
+            premiumProgress =
+                Math.max(
+                    0,
+                    Math.min(
+                        100,
+                        premiumProgress
+                    )
+                );
+
+
+            /* =================================================
+               COMPLETION
+            ================================================= */
+
+            let completed =
+                booleanValue(
+                    user.premium_verification_completed
+                );
+
+
+            /*
+             * Si Premium est déjà actif et que la progression
+             * n'est pas encore à 100, on finalise la vérification.
+             *
+             * Cela permet également de réparer les anciens
+             * comptes Premium.
+             */
+
+            if (
+                isPremium &&
+                (
+                    premiumProgress < 100 ||
+                    !completed
+                )
+            ) {
+
+                const updateResult =
+                    await client.query(
+                        `
+                        UPDATE users
+
+                        SET
+
+                            premium_verification_progression = 100,
+
+                            premium_verification_completed = TRUE,
+
+                            updated_at =
+                                CURRENT_TIMESTAMP
+
+                        WHERE id = $1
+
+                        RETURNING
+                            premium_verification_progression,
+                            premium_verification_completed,
+                            updated_at
+                        `,
+                        [
+                            userId
+                        ]
+                    );
+
+
+                if (
+                    updateResult.rows.length > 0
+                ) {
+
+                    premiumProgress =
+                        Number(
+                            updateResult
+                                .rows[0]
+                                .premium_verification_progression
+                        );
+
+
+                    completed =
+                        Boolean(
+                            updateResult
+                                .rows[0]
+                                .premium_verification_completed
+                        );
+
+                }
+
+            }
+
+
+            /* =================================================
+               STATUT FINAL
+            ================================================= */
+
+            const premiumStatus =
+                completed &&
+                premiumProgress >= 100
+
+                    ? "Terminé"
+
+                    : "En cours";
+
+
+            /* =================================================
+               REPONSE
+            ================================================= */
+
+            return res.json({
+
+                success: true,
+
+                verified:
+                    completed &&
+                    premiumProgress >= 100,
+
+                premium:
+                    isPremium,
+
+                /*
+                 * IMPORTANT :
+                 *
+                 * Ceci reste la progression générale.
+                 *
+                 * Elle n'est jamais modifiée ici.
+                 */
+                progression:
+                    Number(
+                        user.progression
+                    ) || 50,
+
+                progression_status:
+                    progressionStatus(
+                        user.progression
+                    ),
+
+                /*
+                 * Progression spécifique Premium.
+                 */
+                premium_verification_progression:
+                    premiumProgress,
+
+                premium_progression:
+                    premiumProgress,
+
+                progression_premium:
+                    premiumProgress,
+
+                premium_verification_completed:
+                    completed,
+
+                verification_premium_terminee:
+                    completed,
+
+                premium_verification_status:
+                    premiumStatus,
+
+                premium_verification: {
+
+                    progression:
+                        premiumProgress,
+
+                    completed:
+                        completed,
+
+                    status:
+                        premiumStatus
+
+                },
+
+                premium_until:
+                    user.premium_until,
+
+                message:
+
+                    premiumStatus === "Terminé"
+
+                        ? "Vérification Premium terminée."
+
+                        : "Vérification Premium en cours."
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "[PREMIUM VERIFICATION GET]",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de la vérification Premium.",
+
+                error:
+                    error.message
+
+            });
+
+
+        } finally {
+
+            if (client) {
+
+                client.release();
+
+            }
+
+        }
+
+    }
+);
+
+
+/* ============================================================
+   POST
+   /api/users/:id/premium-verification
+
+   FINALISATION DE LA VERIFICATION PREMIUM
+
+   Cette route est appelée lorsque la page de vérification
+   Premium doit terminer le processus.
+
+   Elle vérifie d'abord que le compte est Premium.
+
+   Si oui :
+
+       premium_verification_progression = 100
+       premium_verification_completed = true
+
+   Sinon :
+
+       aucune modification.
+============================================================ */
+
+app.post(
+    "/api/users/:id/premium-verification",
+    async (req, res) => {
+
+        let client = null;
+
+        let transactionStarted =
+            false;
+
+
+        try {
+
+            const userId =
+                Number(
+                    req.params.id
+                );
+
+
+            /* =================================================
+               VALIDATION ID
+            ================================================= */
+
+            if (
+                !Number.isInteger(userId) ||
+                userId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant utilisateur invalide."
+
+                });
+
+            }
+
+
+            client =
+                await pool.connect();
+
+
+            /* =================================================
+               TRANSACTION
+            ================================================= */
+
+            await client.query(
+                "BEGIN"
+            );
+
+            transactionStarted =
+                true;
+
+
+            /* =================================================
+               VERROUILLER LE COMPTE
+            ================================================= */
+
+            const result =
+                await client.query(
+                    `
+                    SELECT
+                        id,
+                        nom,
+                        email,
+                        is_premium,
+                        is_blocked,
+                        progression,
+                        premium_until,
+                        premium_verification_progression,
+                        premium_verification_completed
+
+                    FROM users
+
+                    WHERE id = $1
+
                     FOR UPDATE
                     `,
-                    [userId]
+                    [
+                        userId
+                    ]
                 );
+
+
+            /* =================================================
+               UTILISATEUR INTROUVABLE
+            ================================================= */
 
             if (
                 result.rows.length === 0
@@ -6535,42 +6976,229 @@ app.get(
                     "ROLLBACK"
                 );
 
+                transactionStarted =
+                    false;
+
+
                 return res.status(404).json({
 
                     success: false,
 
                     message:
-                        "Utilisateur introuvable"
+                        "Utilisateur introuvable."
+
                 });
+
             }
+
 
             const user =
                 result.rows[0];
 
-            /*
-             * Si Premium est actif,
-             * la vérification est terminée.
-             */
+
+            /* =================================================
+               COMPTE BLOQUE
+            ================================================= */
+
             if (
-                user.is_premium === true
+                booleanValue(
+                    user.is_blocked
+                )
             ) {
 
                 await client.query(
+                    "ROLLBACK"
+                );
+
+                transactionStarted =
+                    false;
+
+
+                return res.status(403).json({
+
+                    success: false,
+
+                    message:
+                        "Ce compte est bloqué."
+
+                });
+
+            }
+
+
+            /* =================================================
+               VERIFICATION PREMIUM
+            ================================================= */
+
+            const isPremium =
+                user.is_premium === true ||
+                user.is_premium === "true" ||
+                user.is_premium === 1 ||
+                user.is_premium === "1";
+
+
+            /* =================================================
+               PAS PREMIUM
+            ================================================= */
+
+            if (!isPremium) {
+
+                await client.query(
+                    "ROLLBACK"
+                );
+
+                transactionStarted =
+                    false;
+
+
+                const currentProgress =
+                    Number(
+                        user.premium_verification_progression
+                    );
+
+
+                const safeProgress =
+                    Number.isFinite(
+                        currentProgress
+                    )
+
+                        ? Math.max(
+                            0,
+                            Math.min(
+                                100,
+                                currentProgress
+                            )
+                        )
+
+                        : 50;
+
+
+                return res.json({
+
+                    success: true,
+
+                    verified:
+                        false,
+
+                    premium:
+                        false,
+
+                    /*
+                     * Progression générale intacte.
+                     */
+                    progression:
+                        Number(
+                            user.progression
+                        ) || 50,
+
+                    progression_status:
+                        progressionStatus(
+                            user.progression
+                        ),
+
+                    /*
+                     * Progression Premium.
+                     */
+                    premium_verification_progression:
+                        safeProgress,
+
+                    premium_progression:
+                        safeProgress,
+
+                    progression_premium:
+                        safeProgress,
+
+                    premium_verification_completed:
+                        false,
+
+                    verification_premium_terminee:
+                        false,
+
+                    premium_verification_status:
+                        "En cours",
+
+                    premium_verification: {
+
+                        progression:
+                            safeProgress,
+
+                        completed:
+                            false,
+
+                        status:
+                            "En cours"
+
+                    },
+
+                    message:
+                        "Le compte Premium n'est pas encore actif."
+
+                });
+
+            }
+
+
+            /* =================================================
+               TERMINER LA PROGRESSION PREMIUM
+            ================================================= */
+
+            const updateResult =
+                await client.query(
                     `
                     UPDATE users
+
                     SET
-                        progression = $1,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = $2
+
+                        premium_verification_progression = 100,
+
+                        premium_verification_completed = TRUE,
+
+                        updated_at =
+                            CURRENT_TIMESTAMP
+
+                    WHERE id = $1
+
+                    RETURNING
+
+                        id,
+                        nom,
+                        email,
+                        is_premium,
+                        progression,
+                        premium_verification_progression,
+                        premium_verification_completed,
+                        premium_until,
+                        updated_at
                     `,
                     [
-                        COMPLETED_USER_PROGRESSION,
                         userId
                     ]
                 );
 
-                user.progression =
-                    COMPLETED_USER_PROGRESSION;
+
+            if (
+                updateResult.rows.length === 0
+            ) {
+
+                throw new Error(
+                    "Impossible de mettre à jour la vérification Premium."
+                );
+
+            }
+
+
+            const updatedUser =
+                updateResult.rows[0];
+
+
+            /* =================================================
+               ACTIVITE UTILISATEUR
+
+               Si cette insertion échoue, elle ne doit pas
+               empêcher la validation Premium.
+            ================================================= */
+
+            try {
 
                 await client.query(
                     `
@@ -6583,218 +7211,76 @@ app.get(
                     VALUES
                     (
                         $1,
-                        'VERIFICATION_PREMIUM',
-                        'Vérification Premium terminée - progression 100%'
+                        $2,
+                        $3
                     )
                     `,
-                    [userId]
+                    [
+                        userId,
+
+                        "VERIFICATION_PREMIUM",
+
+                        "Vérification Premium terminée - progression Premium 100%"
+                    ]
                 );
+
+            } catch (activityError) {
+
+                console.error(
+                    "[PREMIUM VERIFICATION] " +
+                    "Activité non enregistrée :",
+                    activityError.message
+                );
+
             }
 
-            await client.query(
-                "COMMIT"
-            );
 
-            const completed =
-                user.is_premium === true;
+            /* =================================================
+               NOTIFICATION
 
-            res.json({
-
-                success: true,
-
-                verified:
-                    completed,
-
-                premium:
-                    Boolean(
-                        user.is_premium
-                    ),
-
-                progression:
-                    user.progression,
-
-                progression_status:
-                    completed
-                        ? "Terminé"
-                        : "En cours",
-
-                message:
-                    completed
-                        ? "Vérification Premium terminée."
-                        : "Vérification Premium en cours."
-            });
-
-        } catch (error) {
+               Elle ne doit pas faire échouer la validation
+               principale si la table notification rencontre
+               un problème.
+            ================================================= */
 
             try {
 
-                await client.query(
-                    "ROLLBACK"
+                await createNotification(
+                    client,
+                    userId,
+                    "Vérification Premium terminée",
+                    "Votre vérification Premium est terminée. Votre accès Premium est confirmé.",
+                    "success"
                 );
 
-            } catch (_) {}
+            } catch (notificationError) {
 
-            console.error(
-                "[PREMIUM VERIFICATION]",
-                error
-            );
-
-            res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Erreur lors de la vérification Premium",
-
-                error:
-                    error.message
-            });
-
-        } finally {
-
-            client.release();
-        }
-    }
-);
-
-/* ============================================================
-   VÉRIFICATION PREMIUM POST
-============================================================ */
-
-app.post(
-    "/api/users/:id/premium-verification",
-    async (req, res) => {
-
-        const client =
-            await pool.connect();
-
-        try {
-
-            const userId =
-                Number(
-                    req.params.id
+                console.error(
+                    "[PREMIUM VERIFICATION] " +
+                    "Notification non enregistrée :",
+                    notificationError.message
                 );
 
-            if (
-                !Number.isInteger(userId) ||
-                userId <= 0
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Identifiant utilisateur invalide"
-                });
             }
 
-            await client.query(
-                "BEGIN"
-            );
 
-            const result =
-                await client.query(
-                    `
-                    SELECT
-                        id,
-                        is_premium,
-                        progression
-                    FROM users
-                    WHERE id = $1
-                    FOR UPDATE
-                    `,
-                    [userId]
-                );
-
-            if (
-                result.rows.length === 0
-            ) {
-
-                await client.query(
-                    "ROLLBACK"
-                );
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Utilisateur introuvable"
-                });
-            }
-
-            const user =
-                result.rows[0];
-
-            if (
-                user.is_premium !== true
-            ) {
-
-                await client.query(
-                    "ROLLBACK"
-                );
-
-                return res.json({
-
-                    success: true,
-
-                    verified:
-                        false,
-
-                    premium:
-                        false,
-
-                    progression:
-                        user.progression,
-
-                    progression_status:
-                        progressionStatus(
-                            user.progression
-                        ),
-
-                    message:
-                        "Le compte Premium n'est pas encore actif."
-                });
-            }
-
-            await client.query(
-                `
-                UPDATE users
-                SET
-                    progression = $1,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = $2
-                `,
-                [
-                    COMPLETED_USER_PROGRESSION,
-                    userId
-                ]
-            );
-
-            await client.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details
-                )
-                VALUES
-                (
-                    $1,
-                    'VERIFICATION_PREMIUM',
-                    'Vérification Premium terminée - progression 100%'
-                )
-                `,
-                [userId]
-            );
+            /* =================================================
+               COMMIT
+            ================================================= */
 
             await client.query(
                 "COMMIT"
             );
 
-            res.json({
+            transactionStarted =
+                false;
+
+
+            /* =================================================
+               REPONSE FINALE
+            ================================================= */
+
+            return res.json({
 
                 success: true,
 
@@ -6804,48 +7290,130 @@ app.post(
                 premium:
                     true,
 
+                /*
+                 * Progression générale :
+                 * elle reste celle enregistrée avant.
+                 */
                 progression:
-                    COMPLETED_USER_PROGRESSION,
+                    Number(
+                        updatedUser.progression
+                    ) || 50,
 
                 progression_status:
+                    progressionStatus(
+                        updatedUser.progression
+                    ),
+
+                /*
+                 * Progression spécifique Premium :
+                 */
+                premium_verification_progression:
+                    100,
+
+                premium_progression:
+                    100,
+
+                progression_premium:
+                    100,
+
+                premium_verification_completed:
+                    true,
+
+                verification_premium_terminee:
+                    true,
+
+                premium_verification_status:
                     "Terminé",
+
+                premium_verification: {
+
+                    progression:
+                        100,
+
+                    completed:
+                        true,
+
+                    status:
+                        "Terminé"
+
+                },
+
+                premium_until:
+                    updatedUser.premium_until,
+
+                user:
+                    publicUser(
+                        updatedUser
+                    ),
 
                 message:
                     "Vérification Premium terminée avec succès."
+
             });
+
 
         } catch (error) {
 
-            try {
 
-                await client.query(
-                    "ROLLBACK"
-                );
+            /* =================================================
+               ROLLBACK
+            ================================================= */
 
-            } catch (_) {}
+            if (
+                transactionStarted
+            ) {
+
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[PREMIUM VERIFICATION] " +
+                        "Erreur rollback :",
+                        rollbackError.message
+                    );
+
+                }
+
+            }
+
 
             console.error(
                 "[PREMIUM VERIFICATION POST]",
                 error
             );
 
-            res.status(500).json({
+
+            return res.status(500).json({
 
                 success: false,
 
                 message:
-                    "Erreur vérification Premium",
+                    "Erreur lors de la vérification Premium.",
 
                 error:
                     error.message
+
             });
+
 
         } finally {
 
-            client.release();
+            if (client) {
+
+                client.release();
+
+            }
+
         }
+
     }
 );
+
 
 /* ============================================================
    404 API
@@ -6867,9 +7435,12 @@ app.use(
 
             path:
                 req.originalUrl
+
         });
+
     }
 );
+
 
 /* ============================================================
    ERREUR GLOBALE
@@ -6888,12 +7459,17 @@ app.use(
             error
         );
 
+
         if (
             res.headersSent
         ) {
 
-            return next(error);
+            return next(
+                error
+            );
+
         }
+
 
         res.status(500).json({
 
@@ -6904,9 +7480,12 @@ app.use(
 
             error:
                 error.message
+
         });
+
     }
 );
+
 
 /* ============================================================
    ARRÊT PROPRE
@@ -6920,15 +7499,21 @@ async function gracefulShutdown(
         `${signal} reçu. Arrêt du serveur...`
     );
 
+
     try {
 
         await pool.end();
+
 
         console.log(
             "Connexion PostgreSQL fermée."
         );
 
-        process.exit(0);
+
+        process.exit(
+            0
+        );
+
 
     } catch (error) {
 
@@ -6937,9 +7522,15 @@ async function gracefulShutdown(
             error
         );
 
-        process.exit(1);
+
+        process.exit(
+            1
+        );
+
     }
+
 }
+
 
 process.on(
     "SIGTERM",
@@ -6949,6 +7540,7 @@ process.on(
         )
 );
 
+
 process.on(
     "SIGINT",
     () =>
@@ -6956,6 +7548,7 @@ process.on(
             "SIGINT"
         )
 );
+
 
 /* ============================================================
    DÉMARRAGE
