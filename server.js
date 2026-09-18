@@ -3016,6 +3016,337 @@ app.patch(
 
 /* ============================================================
    PROGRESSION GLOBALE
+   - Modification manuelle par l'admin
+   - Progression automatique aléatoire
+   - Celestine = 100 %
+   - 100 % = progression verrouillée
+============================================================ */
+
+
+/* ============================================================
+   UTILISATEUR QUI DOIT RESTER À 100 %
+============================================================ */
+
+const EMAIL_UTILISATEUR_100 =
+    "celestine@gmail.com";
+
+
+/* ============================================================
+   GENERER UNE PROGRESSION ALEATOIRE
+============================================================ */
+
+function randomProgression() {
+
+    /*
+     * Valeur aléatoire entre 10 et 99.
+     *
+     * On ne génère jamais 100 ici.
+     * 100 % est réservé aux utilisateurs terminés.
+     */
+
+    return Math.floor(
+        Math.random() * 90
+    ) + 10;
+
+}
+
+
+/* ============================================================
+   VERROUILLER CELESTINE À 100 %
+============================================================ */
+
+async function ensureCelestineCompleted() {
+
+    try {
+
+        await pool.query(
+            `
+            UPDATE users
+
+            SET
+                progression = 100,
+                updated_at = CURRENT_TIMESTAMP
+
+            WHERE
+                LOWER(TRIM(email))
+                =
+                LOWER(TRIM($1))
+            `,
+            [
+                EMAIL_UTILISATEUR_100
+            ]
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "[PROGRESSION AUTO] ERREUR CELESTINE :",
+            error
+        );
+
+    }
+
+}
+
+
+/* ============================================================
+   MISE À JOUR AUTOMATIQUE DES PROGRESSIONS
+============================================================ */
+
+async function updateRandomProgressions() {
+
+    try {
+
+        console.log(
+            "============================================================"
+        );
+
+        console.log(
+            "[PROGRESSION AUTO] Démarrage..."
+        );
+
+        console.log(
+            "============================================================"
+        );
+
+
+        /* ====================================================
+           1. CELESTINE EST TOUJOURS À 100 %
+        ==================================================== */
+
+        await ensureCelestineCompleted();
+
+
+        /* ====================================================
+           2. RECUPERER UNIQUEMENT LES UTILISATEURS
+              QUI N'ONT PAS ENCORE ATTEINT 100 %
+        ==================================================== */
+
+        const result =
+            await pool.query(
+                `
+                SELECT
+                    id,
+                    email,
+                    progression
+
+                FROM users
+
+                WHERE
+                    COALESCE(progression, 0) < 100
+
+                AND
+                    LOWER(TRIM(email))
+                    <>
+                    LOWER(TRIM($1))
+
+                ORDER BY
+                    id ASC
+                `,
+                [
+                    EMAIL_UTILISATEUR_100
+                ]
+            );
+
+
+        /* ====================================================
+           3. PARCOURIR LES UTILISATEURS
+        ==================================================== */
+
+        let nombreModifie =
+            0;
+
+
+        for (
+            const user
+            of result.rows
+        ) {
+
+            const ancienneProgression =
+                Number(
+                    user.progression || 0
+                );
+
+
+            /* =================================================
+               SECURITE :
+               SI L'UTILISATEUR EST À 100 %,
+               ON NE TOUCHE PLUS À SA PROGRESSION.
+            ================================================= */
+
+            if (
+                ancienneProgression >= 100
+            ) {
+
+                console.log(
+                    `[PROGRESSION AUTO] ${user.email} déjà terminé → 100%`
+                );
+
+                continue;
+
+            }
+
+
+            /* =================================================
+               GENERER UNE NOUVELLE PROGRESSION
+            ================================================= */
+
+            const nouvelleProgression =
+                randomProgression();
+
+
+            /* =================================================
+               MISE À JOUR
+
+               La condition < 100 garantit qu'un utilisateur
+               terminé entre-temps ne sera pas redescendu.
+            ================================================= */
+
+            const updateResult =
+                await pool.query(
+                    `
+                    UPDATE users
+
+                    SET
+                        progression = $1,
+                        updated_at = CURRENT_TIMESTAMP
+
+                    WHERE
+                        id = $2
+
+                    AND
+                        COALESCE(progression, 0) < 100
+
+                    RETURNING
+                        id,
+                        email,
+                        progression
+                    `,
+                    [
+                        nouvelleProgression,
+                        user.id
+                    ]
+                );
+
+
+            /* =================================================
+               VERIFIER LA MISE À JOUR
+            ================================================= */
+
+            if (
+                updateResult.rows.length > 0
+            ) {
+
+                const utilisateur =
+                    updateResult.rows[0];
+
+
+                nombreModifie++;
+
+
+                console.log(
+                    `[PROGRESSION AUTO] ${utilisateur.email} : ${ancienneProgression}% → ${utilisateur.progression}%`
+                );
+
+            }
+
+        }
+
+
+        /* ====================================================
+           4. VERIFICATION FINALE DE CELESTINE
+        ==================================================== */
+
+        await ensureCelestineCompleted();
+
+
+        /* ====================================================
+           5. FIN
+        ==================================================== */
+
+        console.log(
+            "------------------------------------------------------------"
+        );
+
+        console.log(
+            `[PROGRESSION AUTO] ${nombreModifie} utilisateur(s) mis à jour.`
+        );
+
+        console.log(
+            "[PROGRESSION AUTO] Mise à jour terminée."
+        );
+
+        console.log(
+            "============================================================"
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            "============================================================"
+        );
+
+        console.error(
+            "[PROGRESSION AUTO] ERREUR :",
+            error
+        );
+
+        console.error(
+            "============================================================"
+        );
+
+    }
+
+}
+
+
+/* ============================================================
+   LANCEMENT AUTOMATIQUE
+============================================================ */
+
+
+/*
+ * 24 heures en millisecondes
+ */
+
+const PROGRESSION_INTERVALLE =
+    24 * 60 * 60 * 1000;
+
+
+/*
+ * Première exécution 5 secondes
+ * après le démarrage du serveur.
+ */
+
+setTimeout(
+    async () => {
+
+        await updateRandomProgressions();
+
+    },
+    5000
+);
+
+
+/*
+ * Ensuite, vérification toutes les 24 heures.
+ */
+
+setInterval(
+    async () => {
+
+        await updateRandomProgressions();
+
+    },
+    PROGRESSION_INTERVALLE
+);
+
+
+/* ============================================================
+   MODIFICATION MANUELLE DE LA PROGRESSION
+   ADMIN
 ============================================================ */
 
 app.patch(
@@ -3024,6 +3355,11 @@ app.patch(
     async (req, res) => {
 
         try {
+
+
+            /* =================================================
+               1. VERIFIER L'ID
+            ================================================= */
 
             const id =
                 Number(
@@ -3037,19 +3373,113 @@ app.patch(
             ) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     message:
                         "Identifiant utilisateur invalide"
+
                 });
 
             }
 
 
-            const progression =
+            /* =================================================
+               2. VERIFIER QUE L'UTILISATEUR EXISTE
+            ================================================= */
+
+            const existingUser =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        email,
+                        progression
+
+                    FROM users
+
+                    WHERE id = $1
+                    `,
+                    [
+                        id
+                    ]
+                );
+
+
+            if (
+                existingUser.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable"
+
+                });
+
+            }
+
+
+            const user =
+                existingUser.rows[0];
+
+
+            const ancienneProgression =
+                Number(
+                    user.progression || 0
+                );
+
+
+            /* =================================================
+               3. CALCULER LA NOUVELLE PROGRESSION
+            ================================================= */
+
+            let progression =
                 clampProgress(
                     req.body?.progression
                 );
 
+
+            /* =================================================
+               4. PROTECTION DES UTILISATEURS TERMINÉS
+
+               Si l'utilisateur était déjà à 100 %,
+               il reste obligatoirement à 100 %.
+            ================================================= */
+
+            if (
+                ancienneProgression >= 100
+            ) {
+
+                progression = 100;
+
+            }
+
+
+            /* =================================================
+               5. CELESTINE DOIT TOUJOURS ÊTRE À 100 %
+            ================================================= */
+
+            if (
+                String(user.email || "")
+                    .trim()
+                    .toLowerCase()
+                ===
+                EMAIL_UTILISATEUR_100
+                    .trim()
+                    .toLowerCase()
+            ) {
+
+                progression = 100;
+
+            }
+
+
+            /* =================================================
+               6. MISE À JOUR
+            ================================================= */
 
             const result =
                 await pool.query(
@@ -3058,13 +3488,14 @@ app.patch(
 
                     SET
                         progression = $1,
-                        updated_at =
-                            CURRENT_TIMESTAMP
+                        updated_at = CURRENT_TIMESTAMP
 
-                    WHERE id = $2
+                    WHERE
+                        id = $2
 
                     RETURNING
                         id,
+                        email,
                         progression
                     `,
                     [
@@ -3074,18 +3505,29 @@ app.patch(
                 );
 
 
+            /* =================================================
+               7. VERIFICATION
+            ================================================= */
+
             if (
                 result.rows.length === 0
             ) {
 
                 return res.status(404).json({
+
                     success: false,
+
                     message:
                         "Utilisateur introuvable"
+
                 });
 
             }
 
+
+            /* =================================================
+               8. STATUT
+            ================================================= */
 
             const statut =
                 progression >= 100
@@ -3093,25 +3535,41 @@ app.patch(
                     : "En cours";
 
 
+            /* =================================================
+               9. JOURNAL ADMIN
+            ================================================= */
+
             await logAdminAction(
+
                 "MODIFICATION_PROGRESSION",
+
                 `Utilisateur ${id} : ${progression}% (${statut})`
+
             );
 
+
+            /* =================================================
+               10. REPONSE
+            ================================================= */
 
             return res.json({
 
                 success: true,
 
                 user: {
+
                     id:
                         result.rows[0].id,
+
+                    email:
+                        result.rows[0].email,
 
                     progression:
                         result.rows[0].progression,
 
                     statut:
                         statut
+
                 },
 
                 message:
@@ -3122,6 +3580,7 @@ app.patch(
 
         } catch (error) {
 
+
             console.error(
                 "[PROGRESSION GLOBALE]",
                 error
@@ -3129,17 +3588,18 @@ app.patch(
 
 
             return res.status(500).json({
+
                 success: false,
+
                 message:
                     "Erreur progression"
+
             });
 
         }
 
     }
 );
-
-
 /* ============================================================
    AUTORISER CERTIFICAT
 ============================================================ */
