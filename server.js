@@ -4,7 +4,7 @@
    BMJ SERVICE — BACKEND
    Node.js + Express + PostgreSQL
 
-   VERSION ORGANISÉE — MESSAGES INTÉGRÉS
+   VERSION ORGANISÉE ET CORRIGÉE
 
    IMPORTANT :
    ------------------------------------------------------------
@@ -13,12 +13,14 @@
    - Aucun TRUNCATE
    - Aucun DELETE automatique
    - Messages existants conservés
+   - Ancienne table "messages" conservée
+   - Nouvelle table "sms_messages" indépendante
    - Notifications conservées
    - Progression aléatoire toutes les 24 heures
    - 100 % permanent
    - celestine@gmail.com = 100 %
-   - Système de messages complet
-   ============================================================ */
+   - Nouveau système SMS indépendant
+============================================================ */
 
 
 const express = require("express");
@@ -38,16 +40,18 @@ const PORT =
 
 
 /*
- * IMPORTANT :
- * Ne mets pas le mot de passe PostgreSQL directement dans
- * le code publié sur GitHub.
+ * DATABASE_URL DOIT ÊTRE CONFIGURÉE DANS RENDER.
  *
- * Sur Render :
- * DATABASE_URL = ton URL PostgreSQL complète
+ * Exemple de variable Render :
+ *
+ * DATABASE_URL=postgresql://...
+ *
+ * Ne pas mettre le mot de passe PostgreSQL
+ * directement dans GitHub.
  */
 
 const DATABASE_URL =
-    process.env.DATABASE_URL || "postgresql://name_bmj_db_user:TjgoLRbYV0LizRgBFD1nepGqSqErgBgD@dpg-dagn0e15efls73b8rjh0-a/name_bmj_db";
+    process.env.DATABASE_URL || "";
 
 
 const ADMIN_EMAIL =
@@ -76,11 +80,19 @@ const PROGRESSION_INTERVALLE =
    POSTGRESQL
 ============================================================ */
 
+if (!DATABASE_URL) {
+
+    console.warn(
+        "[DATABASE] ATTENTION : DATABASE_URL n'est pas configurée."
+    );
+}
+
+
 const pool =
     new Pool({
 
         connectionString:
-            DATABASE_URL,
+            DATABASE_URL || undefined,
 
         ssl:
             DATABASE_URL
@@ -97,6 +109,18 @@ const pool =
         connectionTimeoutMillis:
             10000
     });
+
+
+pool.on(
+    "error",
+    (error) => {
+
+        console.error(
+            "[DATABASE POOL] ERREUR :",
+            error.message
+        );
+    }
+);
 
 
 /* ============================================================
@@ -160,6 +184,10 @@ function clean(value) {
 }
 
 
+/* ------------------------------------------------------------
+   Nombre sécurisé
+------------------------------------------------------------ */
+
 function safeNumber(
     value,
     fallback = 0
@@ -174,12 +202,17 @@ function safeNumber(
 }
 
 
+/* ------------------------------------------------------------
+   Progression normalisée
+------------------------------------------------------------ */
+
 function normalizeProgression(
     value
 ) {
 
     let progression =
         Number(value);
+
 
     if (
         !Number.isFinite(progression)
@@ -188,8 +221,10 @@ function normalizeProgression(
         progression = 0;
     }
 
+
     progression =
         Math.round(progression);
+
 
     return Math.max(
         0,
@@ -201,6 +236,10 @@ function normalizeProgression(
 }
 
 
+/* ------------------------------------------------------------
+   Alias progression
+------------------------------------------------------------ */
+
 function clampProgress(
     value
 ) {
@@ -211,16 +250,15 @@ function clampProgress(
 }
 
 
-function randomProgression() {
+/* ------------------------------------------------------------
+   Progression aléatoire
+ *
+ * 10 → 99
+ *
+ * 100 n'est jamais généré automatiquement.
+------------------------------------------------------------ */
 
-    /*
-     * Génère uniquement :
-     *
-     * 10 → 99
-     *
-     * 100 % n'est jamais généré
-     * automatiquement.
-     */
+function randomProgression() {
 
     return (
         Math.floor(
@@ -229,6 +267,10 @@ function randomProgression() {
     );
 }
 
+
+/* ------------------------------------------------------------
+   Vérifier Celestine
+------------------------------------------------------------ */
 
 function isCelestine(
     email
@@ -244,6 +286,10 @@ function isCelestine(
 }
 
 
+/* ------------------------------------------------------------
+   Valeur booléenne
+------------------------------------------------------------ */
+
 function booleanValue(
     value
 ) {
@@ -257,6 +303,10 @@ function booleanValue(
 }
 
 
+/* ------------------------------------------------------------
+   Email
+------------------------------------------------------------ */
+
 function isValidEmail(
     email
 ) {
@@ -267,6 +317,10 @@ function isValidEmail(
         );
 }
 
+
+/* ------------------------------------------------------------
+   Hash mot de passe
+------------------------------------------------------------ */
 
 function hashPassword(
     password
@@ -281,6 +335,10 @@ function hashPassword(
 }
 
 
+/* ------------------------------------------------------------
+   Token administrateur
+------------------------------------------------------------ */
+
 function createToken() {
 
     return crypto
@@ -288,6 +346,10 @@ function createToken() {
         .toString("hex");
 }
 
+
+/* ------------------------------------------------------------
+   Hash token
+------------------------------------------------------------ */
 
 function tokenHash(
     token
@@ -302,6 +364,10 @@ function tokenHash(
 }
 
 
+/* ------------------------------------------------------------
+   Utilisateur public
+------------------------------------------------------------ */
+
 function publicUser(
     user
 ) {
@@ -311,18 +377,21 @@ function publicUser(
         return null;
     }
 
+
     const copy = {
         ...user
     };
 
+
     delete copy.password;
+
 
     return copy;
 }
 
 
 /* ============================================================
-   MESSAGES — NORMALISATION
+   NORMALISATION DES MESSAGES
 ============================================================ */
 
 function normalizeMessagePriority(
@@ -330,14 +399,20 @@ function normalizeMessagePriority(
 ) {
 
     const allowed = [
+
         "normal",
+
         "important",
+
         "urgent"
+
     ];
+
 
     const value =
         clean(priority)
             .toLowerCase();
+
 
     return allowed.includes(value)
         ? value
@@ -345,26 +420,41 @@ function normalizeMessagePriority(
 }
 
 
+/* ------------------------------------------------------------
+   Audience ancienne messagerie
+------------------------------------------------------------ */
+
 function normalizeMessageAudience(
     audience
 ) {
 
     const allowed = [
+
         "user",
+
         "all",
+
         "premium",
+
         "standard"
+
     ];
+
 
     const value =
         clean(audience)
             .toLowerCase();
+
 
     return allowed.includes(value)
         ? value
         : "";
 }
 
+
+/* ------------------------------------------------------------
+   Sujet
+------------------------------------------------------------ */
 
 function normalizeMessageSubject(
     subject
@@ -373,10 +463,12 @@ function normalizeMessageSubject(
     const value =
         clean(subject);
 
+
     if (!value) {
 
         return "Message BMJ SERVICE";
     }
+
 
     return value.substring(
         0,
@@ -385,6 +477,10 @@ function normalizeMessageSubject(
 }
 
 
+/* ------------------------------------------------------------
+   Contenu
+------------------------------------------------------------ */
+
 function normalizeMessageContent(
     message
 ) {
@@ -392,6 +488,10 @@ function normalizeMessageContent(
     return clean(message);
 }
 
+
+/* ------------------------------------------------------------
+   Données ancienne messagerie
+------------------------------------------------------------ */
 
 function normalizeAdminMessageData(
     body = {}
@@ -423,10 +523,126 @@ function normalizeAdminMessageData(
 
 
 /* ============================================================
-   EXTRACTION ID UTILISATEUR
+   NOUVEAU SYSTÈME SMS
 ============================================================ */
 
-function getMessageUserId(
+/* ------------------------------------------------------------
+   Priorité SMS
+------------------------------------------------------------ */
+
+function normalizeSmsPriority(
+    priority
+) {
+
+    const allowed = [
+
+        "normal",
+
+        "important",
+
+        "urgent"
+
+    ];
+
+
+    const value =
+        clean(priority)
+            .toLowerCase();
+
+
+    return allowed.includes(value)
+        ? value
+        : "normal";
+}
+
+
+/* ------------------------------------------------------------
+   Audience SMS
+------------------------------------------------------------ */
+
+function normalizeSmsAudience(
+    audience
+) {
+
+    const allowed = [
+
+        "user",
+
+        "all",
+
+        "premium",
+
+        "standard"
+
+    ];
+
+
+    const value =
+        clean(audience)
+            .toLowerCase();
+
+
+    return allowed.includes(value)
+        ? value
+        : "user";
+}
+
+
+/* ------------------------------------------------------------
+   Sujet SMS
+------------------------------------------------------------ */
+
+function normalizeSmsSubject(
+    subject
+) {
+
+    const value =
+        clean(subject);
+
+
+    if (!value) {
+
+        return "BMJ SERVICE";
+    }
+
+
+    return value.substring(
+        0,
+        200
+    );
+}
+
+
+/* ------------------------------------------------------------
+   Message SMS
+------------------------------------------------------------ */
+
+function normalizeSmsMessage(
+    message
+) {
+
+    const value =
+        clean(message);
+
+
+    if (value.length > 10000) {
+
+        return value.substring(
+            0,
+            10000
+        );
+    }
+
+
+    return value;
+}
+
+
+/* ------------------------------------------------------------
+   Extraction ID utilisateur SMS
+------------------------------------------------------------ */
+
+function getSmsUserId(
     body = {}
 ) {
 
@@ -434,11 +650,15 @@ function getMessageUserId(
 
         body.user_id,
 
-        body.recipient_user_id,
-
         body.userId,
 
-        body.recipientUserId
+        body.recipient_user_id,
+
+        body.recipientUserId,
+
+        body.id_user,
+
+        body.idUser
 
     ];
 
@@ -457,6 +677,7 @@ function getMessageUserId(
             const id =
                 Number(value);
 
+
             if (
                 Number.isInteger(id) &&
                 id > 0
@@ -472,6 +693,46 @@ function getMessageUserId(
 }
 
 
+/* ------------------------------------------------------------
+   Données SMS
+------------------------------------------------------------ */
+
+function normalizeSmsData(
+    body = {}
+) {
+
+    return {
+
+        subject:
+            normalizeSmsSubject(
+                body.subject
+            ),
+
+        message:
+            normalizeSmsMessage(
+                body.message
+            ),
+
+        priority:
+            normalizeSmsPriority(
+                body.priority
+            ),
+
+        audience:
+            normalizeSmsAudience(
+                body.audience
+            ),
+
+        parentId:
+            Number.isInteger(
+                Number(body.parent_id)
+            )
+                ? Number(body.parent_id)
+                : null
+    };
+}
+
+
 /* ============================================================
    ADMIN TOKENS
 ============================================================ */
@@ -479,6 +740,10 @@ function getMessageUserId(
 const adminTokens =
     new Map();
 
+
+/* ------------------------------------------------------------
+   Récupérer token
+------------------------------------------------------------ */
 
 function getAdminToken(
     req
@@ -529,6 +794,10 @@ function getAdminToken(
     return null;
 }
 
+
+/* ------------------------------------------------------------
+   Authentification admin
+------------------------------------------------------------ */
 
 function adminAuth(
     req,
@@ -617,11 +886,16 @@ async function logAdminAction(
             )
             `,
             [
+
                 clean(action),
+
                 ADMIN_EMAIL,
+
                 clean(details)
+
             ]
         );
+
 
         return true;
 
@@ -631,6 +905,7 @@ async function logAdminAction(
             "[ADMIN LOG] ERREUR :",
             error.message
         );
+
 
         return false;
     }
@@ -644,12 +919,10 @@ async function safeLogAdminAction(
 
     try {
 
-        await logAdminAction(
+        return await logAdminAction(
             action,
             description
         );
-
-        return true;
 
     } catch (error) {
 
@@ -657,6 +930,7 @@ async function safeLogAdminAction(
             "[BMJ ADMIN LOG] ERREUR :",
             error.message
         );
+
 
         return false;
     }
@@ -706,9 +980,13 @@ async function logUserActivity(
             )
             `,
             [
+
                 id,
+
                 clean(action),
+
                 clean(details)
+
             ]
         );
 
@@ -722,10 +1000,6 @@ async function logUserActivity(
             error.message
         );
 
-        /*
-         * L'activité ne doit jamais faire échouer
-         * une opération principale.
-         */
 
         return false;
     }
@@ -781,10 +1055,15 @@ async function createNotification(
             )
             `,
             [
+
                 id,
+
                 clean(title),
+
                 clean(message),
+
                 clean(type) || "info"
+
             ]
         );
 
@@ -798,12 +1077,6 @@ async function createNotification(
             error.message
         );
 
-        /*
-         * TRÈS IMPORTANT :
-         *
-         * Une erreur de notification ne doit
-         * jamais annuler un message déjà envoyé.
-         */
 
         return false;
     }
@@ -812,7 +1085,7 @@ async function createNotification(
 
 /* ============================================================
    INITIALISATION BASE DE DONNÉES
-   NON DESTRUCTIVE
+   100 % NON DESTRUCTIVE
 ============================================================ */
 
 async function initDatabase() {
@@ -882,11 +1155,11 @@ async function initDatabase() {
 
                 notes_admin TEXT,
 
-                created_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
 
-                updated_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
             `
         );
@@ -983,11 +1256,11 @@ async function initDatabase() {
 
                 admin_note TEXT,
 
-                created_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
 
-                updated_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
             `
         );
@@ -1060,15 +1333,19 @@ async function initDatabase() {
 
                 details TEXT,
 
-                created_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
             `
         );
 
 
         /* ====================================================
-           MESSAGES
+           ANCIENS MESSAGES
+           
+           IMPORTANT :
+           Cette table est conservée.
+           AUCUNE donnée existante n'est supprimée.
         ==================================================== */
 
         await client.query(
@@ -1099,11 +1376,11 @@ async function initDatabase() {
 
                 parent_id INTEGER NULL,
 
-                created_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
 
-                updated_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
             `
         );
@@ -1170,6 +1447,121 @@ async function initDatabase() {
 
 
         /* ====================================================
+           NOUVEAU SYSTÈME SMS
+           
+           IMPORTANT :
+           Table complètement indépendante.
+           
+           L'ancienne table messages n'est PAS modifiée.
+        ==================================================== */
+
+        await client.query(
+            `
+            CREATE TABLE IF NOT EXISTS sms_messages
+            (
+                id SERIAL PRIMARY KEY,
+
+                sender_type TEXT
+                    NOT NULL DEFAULT 'admin',
+
+                sender_id INTEGER NULL,
+
+                recipient_user_id INTEGER
+                    NOT NULL,
+
+                subject TEXT,
+
+                message TEXT
+                    NOT NULL,
+
+                priority TEXT
+                    DEFAULT 'normal',
+
+                audience TEXT
+                    DEFAULT 'user',
+
+                is_read BOOLEAN
+                    DEFAULT FALSE,
+
+                is_archived BOOLEAN
+                    DEFAULT FALSE,
+
+                parent_id INTEGER NULL,
+
+                status TEXT
+                    DEFAULT 'sent',
+
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                updated_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
+            )
+            `
+        );
+
+
+        const smsColumns = {
+
+            sender_type:
+                "TEXT DEFAULT 'admin'",
+
+            sender_id:
+                "INTEGER NULL",
+
+            recipient_user_id:
+                "INTEGER",
+
+            subject:
+                "TEXT",
+
+            message:
+                "TEXT",
+
+            priority:
+                "TEXT DEFAULT 'normal'",
+
+            audience:
+                "TEXT DEFAULT 'user'",
+
+            is_read:
+                "BOOLEAN DEFAULT FALSE",
+
+            is_archived:
+                "BOOLEAN DEFAULT FALSE",
+
+            parent_id:
+                "INTEGER NULL",
+
+            status:
+                "TEXT DEFAULT 'sent'",
+
+            created_at:
+                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+
+            updated_at:
+                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        };
+
+
+        for (
+            const [column, type]
+            of Object.entries(
+                smsColumns
+            )
+        ) {
+
+            await client.query(
+                `
+                ALTER TABLE sms_messages
+                ADD COLUMN IF NOT EXISTS
+                ${column} ${type}
+                `
+            );
+        }
+
+
+        /* ====================================================
            NOTIFICATIONS
         ==================================================== */
 
@@ -1189,8 +1581,8 @@ async function initDatabase() {
 
                 is_read BOOLEAN DEFAULT FALSE,
 
-                created_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
             `
         );
@@ -1222,11 +1614,11 @@ async function initDatabase() {
 
                 downloaded_at TIMESTAMP NULL,
 
-                created_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
 
-                updated_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
             `
         );
@@ -1305,8 +1697,8 @@ async function initDatabase() {
 
                 statut TEXT DEFAULT 'En cours',
 
-                updated_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
             `
         );
@@ -1328,15 +1720,15 @@ async function initDatabase() {
 
                 details TEXT,
 
-                created_at
-                    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP
             )
             `
         );
 
 
         /* ====================================================
-           INDEX
+           INDEX USERS
         ==================================================== */
 
         await client.query(
@@ -1347,6 +1739,10 @@ async function initDatabase() {
             `
         );
 
+
+        /* ====================================================
+           INDEX ANCIENS MESSAGES
+        ==================================================== */
 
         await client.query(
             `
@@ -1384,6 +1780,50 @@ async function initDatabase() {
         );
 
 
+        /* ====================================================
+           INDEX SMS
+        ==================================================== */
+
+        await client.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_sms_recipient
+            ON sms_messages(recipient_user_id)
+            `
+        );
+
+
+        await client.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_sms_parent
+            ON sms_messages(parent_id)
+            `
+        );
+
+
+        await client.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_sms_created
+            ON sms_messages(created_at DESC)
+            `
+        );
+
+
+        await client.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_sms_status
+            ON sms_messages(status)
+            `
+        );
+
+
+        /* ====================================================
+           INDEX NOTIFICATIONS
+        ==================================================== */
+
         await client.query(
             `
             CREATE INDEX IF NOT EXISTS
@@ -1393,6 +1833,10 @@ async function initDatabase() {
         );
 
 
+        /* ====================================================
+           INDEX PROGRESSION
+        ==================================================== */
+
         await client.query(
             `
             CREATE INDEX IF NOT EXISTS
@@ -1401,6 +1845,10 @@ async function initDatabase() {
             `
         );
 
+
+        /* ====================================================
+           INDEX ACTIVITY
+        ==================================================== */
 
         await client.query(
             `
@@ -1415,13 +1863,13 @@ async function initDatabase() {
             "[DATABASE] Initialisation terminée."
         );
 
-
     } catch (error) {
 
         console.error(
             "[DATABASE] ERREUR :",
             error
         );
+
 
         throw error;
 
@@ -1517,10 +1965,11 @@ async function initializeUserProgressions() {
                 FROM users
 
                 WHERE
-                    COALESCE(
-                        progression,
-                        0
-                    ) <= 0
+                    (
+                        progression IS NULL
+                        OR
+                        progression <= 0
+                    )
 
                 AND
                     LOWER(TRIM(email))
@@ -1571,8 +2020,11 @@ async function initializeUserProgressions() {
                         progression
                     `,
                     [
+
                         nouvelleProgression,
+
                         user.id
+
                     ]
                 );
 
@@ -1606,7 +2058,7 @@ async function initializeUserProgressions() {
 
 
 /* ============================================================
-   MISE À JOUR AUTOMATIQUE DES PROGRESSIONS
+   MISE À JOUR AUTOMATIQUE PROGRESSIONS
 ============================================================ */
 
 async function updateRandomProgressions() {
@@ -1700,8 +2152,11 @@ async function updateRandomProgressions() {
                         progression
                     `,
                     [
+
                         nouvelleProgression,
+
                         user.id
+
                     ]
                 );
 
@@ -1813,6 +2268,10 @@ app.patch(
                 );
 
 
+            /*
+             * Une fois à 100 %, impossible de redescendre.
+             */
+
             if (
                 ancienneProgression >= 100
             ) {
@@ -1820,6 +2279,10 @@ app.patch(
                 progression = 100;
             }
 
+
+            /*
+             * Celestine est toujours à 100 %.
+             */
 
             if (
                 isCelestine(
@@ -1848,8 +2311,11 @@ app.patch(
                         progression
                     `,
                     [
+
                         progression,
+
                         id
+
                     ]
                 );
 
@@ -2011,7 +2477,7 @@ app.patch(
 
             /*
              * Celestine :
-             * domaine également à 100 %.
+             * domaine toujours à 100 %.
              */
 
             if (
@@ -2025,8 +2491,8 @@ app.patch(
 
 
             /*
-             * Si la progression globale est déjà
-             * à 100 %, on ne redescend jamais.
+             * Si progression globale déjà terminée,
+             * le domaine ne peut pas redescendre.
              */
 
             if (
@@ -2042,17 +2508,26 @@ app.patch(
             const existing =
                 await pool.query(
                     `
-                    SELECT id
+                    SELECT
+                        id,
+                        progression
+
                     FROM user_progress
+
                     WHERE
                         user_id = $1
+
                     AND
                         domaine = $2
+
                     LIMIT 1
                     `,
                     [
+
                         userId,
+
                         domaine
+
                     ]
                 );
 
@@ -2066,6 +2541,21 @@ app.patch(
             if (
                 existing.rows.length > 0
             ) {
+
+                /*
+                 * Si le domaine était déjà à 100 %,
+                 * il reste à 100 %.
+                 */
+
+                if (
+                    normalizeProgression(
+                        existing.rows[0].progression
+                    ) >= 100
+                ) {
+
+                    progression = 100;
+                }
+
 
                 await pool.query(
                     `
@@ -2081,11 +2571,19 @@ app.patch(
                     WHERE id = $5
                     `,
                     [
+
                         progression,
+
                         chapitreActuel,
+
                         chapitreTotal,
-                        statut,
+
+                        progression >= 100
+                            ? "Terminé"
+                            : "En cours",
+
                         existing.rows[0].id
+
                     ]
                 );
 
@@ -2115,12 +2613,19 @@ app.patch(
                     )
                     `,
                     [
+
                         userId,
+
                         domaine,
+
                         progression,
+
                         chapitreActuel,
+
                         chapitreTotal,
+
                         statut
+
                     ]
                 );
             }
@@ -2143,7 +2648,10 @@ app.patch(
 
                 progression,
 
-                statut,
+                statut:
+                    progression >= 100
+                        ? "Terminé"
+                        : "En cours",
 
                 message:
                     "Progression du domaine mise à jour"
@@ -2184,10 +2692,15 @@ app.get(
         try {
 
             const [
+
                 usersResult,
+
                 paymentResult,
+
                 messagesResult,
+
                 certificatesResult
+
             ] =
                 await Promise.all([
 
@@ -2360,6 +2873,7 @@ app.get(
                         FROM certificates
                         `
                     )
+
                 ]);
 
 
@@ -2505,6 +3019,7 @@ app.get(
                     Number(
                         result.rows[0].users
                     ) || 0
+
             });
 
         } catch (error) {
@@ -2748,18 +3263,26 @@ app.get(
 
 
             const [
+
                 payments,
+
                 messages,
+
                 progress,
+
                 certificates,
+
                 activities,
+
                 notifications
+
             ] =
                 await Promise.all([
 
                     pool.query(
                         `
                         SELECT *
+
                         FROM demandes_paiement
 
                         WHERE user_id = $1
@@ -2808,6 +3331,7 @@ app.get(
                     pool.query(
                         `
                         SELECT *
+
                         FROM user_progress
 
                         WHERE user_id = $1
@@ -2820,6 +3344,7 @@ app.get(
                     pool.query(
                         `
                         SELECT *
+
                         FROM certificates
 
                         WHERE user_id = $1
@@ -2832,6 +3357,7 @@ app.get(
                     pool.query(
                         `
                         SELECT *
+
                         FROM user_activity
 
                         WHERE user_id = $1
@@ -2846,6 +3372,7 @@ app.get(
                     pool.query(
                         `
                         SELECT *
+
                         FROM notifications
 
                         WHERE user_id = $1
@@ -2856,6 +3383,7 @@ app.get(
                         `,
                         [id]
                     )
+
                 ]);
 
 
@@ -2912,8 +3440,22 @@ app.get(
 
 /* ============================================================
    ============================================================
-   MESSAGES — ENVOI INDIVIDUEL
+   ANCIEN SYSTÈME MESSAGES
    ============================================================
+   
+   IMPORTANT :
+   ------------------------------------------------------------
+   Ces routes sont conservées pour ne pas casser l'ancien
+   système ni perdre les anciens messages.
+   
+   La nouvelle page SMS devra utiliser uniquement :
+   
+   /api/admin/sms/...
+============================================================ */
+
+
+/* ============================================================
+   ANCIEN — MESSAGE INDIVIDUEL
 ============================================================ */
 
 app.post(
@@ -2921,8 +3463,8 @@ app.post(
     adminAuth,
     async (req, res) => {
 
-        const client =
-            await pool.connect();
+        let client = null;
+        let transactionStarted = false;
 
 
         try {
@@ -2937,16 +3479,6 @@ app.post(
                 normalizeAdminMessageData(
                     req.body
                 );
-
-
-            console.log(
-                "[MESSAGES] ENVOI INDIVIDUEL",
-                {
-                    userId,
-                    subject: data.subject,
-                    priority: data.priority
-                }
-            );
 
 
             if (!userId) {
@@ -2977,6 +3509,10 @@ app.post(
                         "MESSAGE_EMPTY"
                 });
             }
+
+
+            client =
+                await pool.connect();
 
 
             const userResult =
@@ -3017,17 +3553,11 @@ app.post(
                 userResult.rows[0];
 
 
-            /*
-             * On n'interdit pas l'envoi à un utilisateur
-             * bloqué : le blocage concerne l'accès utilisateur.
-             * Le message doit pouvoir être envoyé par
-             * l'administration.
-             */
-
-
             await client.query(
                 "BEGIN"
             );
+
+            transactionStarted = true;
 
 
             const messageResult =
@@ -3069,10 +3599,15 @@ app.post(
                     RETURNING *
                     `,
                     [
+
                         userId,
+
                         data.subject,
+
                         data.message,
+
                         data.priority
+
                     ]
                 );
 
@@ -3080,11 +3615,6 @@ app.post(
             const savedMessage =
                 messageResult.rows[0];
 
-
-            /*
-             * L'activité utilisateur est dans la même
-             * transaction que le message.
-             */
 
             await client.query(
                 `
@@ -3104,9 +3634,13 @@ app.post(
                 )
                 `,
                 [
+
                     userId,
+
                     "MESSAGE_ADMIN_RECU",
+
                     `Nouveau message administratif : ${data.subject}`
+
                 ]
             );
 
@@ -3115,12 +3649,8 @@ app.post(
                 "COMMIT"
             );
 
+            transactionStarted = false;
 
-            /*
-             * Notification APRÈS COMMIT.
-             *
-             * Si elle échoue, le message reste enregistré.
-             */
 
             await createNotification(
                 pool,
@@ -3161,6 +3691,7 @@ app.post(
 
                     email:
                         user.email
+
                 },
 
                 notification:
@@ -3169,20 +3700,24 @@ app.post(
 
         } catch (error) {
 
-            try {
-
-                await client.query(
-                    "ROLLBACK"
-                );
-
-            } catch (
-                rollbackError
+            if (
+                client &&
+                transactionStarted
             ) {
 
-                console.error(
-                    "[MESSAGES USER] ROLLBACK :",
-                    rollbackError.message
-                );
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[MESSAGES USER] ROLLBACK :",
+                        rollbackError.message
+                    );
+                }
             }
 
 
@@ -3208,14 +3743,17 @@ app.post(
 
         } finally {
 
-            client.release();
+            if (client) {
+
+                client.release();
+            }
         }
     }
 );
 
 
 /* ============================================================
-   MESSAGES — ENVOI À TOUS
+   ANCIEN — MESSAGE TOUS
 ============================================================ */
 
 app.post(
@@ -3223,8 +3761,8 @@ app.post(
     adminAuth,
     async (req, res) => {
 
-        const client =
-            await pool.connect();
+        let client = null;
+        let transactionStarted = false;
 
 
         try {
@@ -3245,6 +3783,10 @@ app.post(
                         "Le message est vide"
                 });
             }
+
+
+            client =
+                await pool.connect();
 
 
             const usersResult =
@@ -3281,6 +3823,8 @@ app.post(
             await client.query(
                 "BEGIN"
             );
+
+            transactionStarted = true;
 
 
             let inserted = 0;
@@ -3327,10 +3871,15 @@ app.post(
                     )
                     `,
                     [
+
                         user.id,
+
                         data.subject,
+
                         data.message,
+
                         data.priority
+
                     ]
                 );
 
@@ -3353,9 +3902,13 @@ app.post(
                     )
                     `,
                     [
+
                         user.id,
+
                         "MESSAGE_ADMIN_RECU",
+
                         `Message général : ${data.subject}`
+
                     ]
                 );
 
@@ -3368,14 +3921,8 @@ app.post(
                 "COMMIT"
             );
 
+            transactionStarted = false;
 
-            /*
-             * Les notifications sont créées après
-             * l'enregistrement des messages.
-             *
-             * Une erreur de notification ne casse
-             * jamais l'envoi.
-             */
 
             for (
                 const user
@@ -3413,20 +3960,24 @@ app.post(
 
         } catch (error) {
 
-            try {
-
-                await client.query(
-                    "ROLLBACK"
-                );
-
-            } catch (
-                rollbackError
+            if (
+                client &&
+                transactionStarted
             ) {
 
-                console.error(
-                    "[MESSAGES ALL] ROLLBACK :",
-                    rollbackError.message
-                );
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[MESSAGES ALL] ROLLBACK :",
+                        rollbackError.message
+                    );
+                }
             }
 
 
@@ -3452,14 +4003,17 @@ app.post(
 
         } finally {
 
-            client.release();
+            if (client) {
+
+                client.release();
+            }
         }
     }
 );
 
 
 /* ============================================================
-   MESSAGES — ENVOI AUX PREMIUM
+   ANCIEN — MESSAGE PREMIUM
 ============================================================ */
 
 app.post(
@@ -3467,8 +4021,8 @@ app.post(
     adminAuth,
     async (req, res) => {
 
-        const client =
-            await pool.connect();
+        let client = null;
+        let transactionStarted = false;
 
 
         try {
@@ -3489,6 +4043,10 @@ app.post(
                         "Le message est vide"
                 });
             }
+
+
+            client =
+                await pool.connect();
 
 
             const usersResult =
@@ -3531,6 +4089,8 @@ app.post(
             await client.query(
                 "BEGIN"
             );
+
+            transactionStarted = true;
 
 
             let inserted = 0;
@@ -3577,10 +4137,15 @@ app.post(
                     )
                     `,
                     [
+
                         user.id,
+
                         data.subject,
+
                         data.message,
+
                         data.priority
+
                     ]
                 );
 
@@ -3603,9 +4168,13 @@ app.post(
                     )
                     `,
                     [
+
                         user.id,
+
                         "MESSAGE_ADMIN_RECU",
+
                         `Message Premium : ${data.subject}`
+
                     ]
                 );
 
@@ -3617,6 +4186,8 @@ app.post(
             await client.query(
                 "COMMIT"
             );
+
+            transactionStarted = false;
 
 
             for (
@@ -3655,20 +4226,24 @@ app.post(
 
         } catch (error) {
 
-            try {
-
-                await client.query(
-                    "ROLLBACK"
-                );
-
-            } catch (
-                rollbackError
+            if (
+                client &&
+                transactionStarted
             ) {
 
-                console.error(
-                    "[MESSAGES PREMIUM] ROLLBACK :",
-                    rollbackError.message
-                );
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[MESSAGES PREMIUM] ROLLBACK :",
+                        rollbackError.message
+                    );
+                }
             }
 
 
@@ -3694,12 +4269,2349 @@ app.post(
 
         } finally {
 
-            client.release();
+            if (client) {
+
+                client.release();
+            }
         }
     }
 );
 
 
+/* ============================================================
+   ============================================================
+   NOUVEAU SYSTÈME SMS
+   ============================================================
+   
+   À PARTIR D'ICI :
+   
+   La nouvelle page de messagerie utilisera UNIQUEMENT
+   ces routes.
+   
+   Table :
+   
+   sms_messages
+   
+   Les anciennes tables/messages ne sont pas utilisées ici.
+============================================================ */
+
+
+/* ============================================================
+   UTILITAIRE — RÉCUPÉRER UN UTILISATEUR
+============================================================ */
+
+async function getSmsUser(
+    clientOrPool,
+    userId
+) {
+
+    const result =
+        await clientOrPool.query(
+            `
+            SELECT
+
+                id,
+                nom,
+                email,
+                telephone,
+                domaine,
+                pays,
+                ville,
+                is_premium,
+                is_blocked,
+                progression
+
+            FROM users
+
+            WHERE id = $1
+
+            LIMIT 1
+            `,
+            [userId]
+        );
+
+
+    return result.rows[0] || null;
+}
+
+
+/* ============================================================
+   UTILITAIRE — CRÉER SMS
+============================================================ */
+
+async function createSmsMessage(
+    client,
+    options = {}
+) {
+
+    const recipientUserId =
+        Number(
+            options.recipientUserId
+        );
+
+
+    if (
+        !Number.isInteger(
+            recipientUserId
+        ) ||
+        recipientUserId <= 0
+    ) {
+
+        throw new Error(
+            "Destinataire SMS invalide."
+        );
+    }
+
+
+    const subject =
+        normalizeSmsSubject(
+            options.subject
+        );
+
+
+    const message =
+        normalizeSmsMessage(
+            options.message
+        );
+
+
+    const priority =
+        normalizeSmsPriority(
+            options.priority
+        );
+
+
+    const audience =
+        normalizeSmsAudience(
+            options.audience
+        );
+
+
+    const parentId =
+        Number.isInteger(
+            Number(options.parentId)
+        )
+            ? Number(options.parentId)
+            : null;
+
+
+    if (!message) {
+
+        throw new Error(
+            "Le message SMS est vide."
+        );
+    }
+
+
+    const result =
+        await client.query(
+            `
+            INSERT INTO sms_messages
+            (
+                sender_type,
+                sender_id,
+                recipient_user_id,
+                subject,
+                message,
+                priority,
+                audience,
+                is_read,
+                is_archived,
+                parent_id,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES
+            (
+                'admin',
+                NULL,
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                FALSE,
+                FALSE,
+                $6,
+                'sent',
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
+            )
+
+            RETURNING *
+            `,
+            [
+
+                recipientUserId,
+
+                subject,
+
+                message,
+
+                priority,
+
+                audience,
+
+                parentId
+
+            ]
+        );
+
+
+    return result.rows[0];
+}
+
+
+/* ============================================================
+   SMS — ENVOI INDIVIDUEL
+============================================================ */
+
+app.post(
+    "/api/admin/sms/send",
+    adminAuth,
+    async (req, res) => {
+
+        let client = null;
+        let transactionStarted = false;
+
+
+        try {
+
+            const userId =
+                getSmsUserId(
+                    req.body
+                );
+
+
+            const data =
+                normalizeSmsData(
+                    req.body
+                );
+
+
+            if (!userId) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant utilisateur manquant",
+
+                    code:
+                        "SMS_USER_ID_MISSING"
+                });
+            }
+
+
+            if (!data.message) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le message SMS est vide",
+
+                    code:
+                        "SMS_MESSAGE_EMPTY"
+                });
+            }
+
+
+            client =
+                await pool.connect();
+
+
+            const user =
+                await getSmsUser(
+                    client,
+                    userId
+                );
+
+
+            if (!user) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable",
+
+                    code:
+                        "SMS_USER_NOT_FOUND"
+                });
+            }
+
+
+            await client.query(
+                "BEGIN"
+            );
+
+            transactionStarted = true;
+
+
+            const savedSms =
+                await createSmsMessage(
+                    client,
+                    {
+
+                        recipientUserId:
+                            userId,
+
+                        subject:
+                            data.subject,
+
+                        message:
+                            data.message,
+
+                        priority:
+                            data.priority,
+
+                        audience:
+                            "user"
+
+                    }
+                );
+
+
+            await client.query(
+                `
+                INSERT INTO user_activity
+                (
+                    user_id,
+                    action,
+                    details,
+                    created_at
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    CURRENT_TIMESTAMP
+                )
+                `,
+                [
+
+                    userId,
+
+                    "SMS_ADMIN_RECU",
+
+                    `SMS reçu : ${data.subject}`
+
+                ]
+            );
+
+
+            await client.query(
+                "COMMIT"
+            );
+
+            transactionStarted = false;
+
+
+            /*
+             * Notification après COMMIT.
+             */
+
+            await createNotification(
+                pool,
+                userId,
+                data.subject,
+                data.message,
+                data.priority === "urgent"
+                    ? "urgent"
+                    : "message"
+            );
+
+
+            await safeLogAdminAction(
+                "SMS_UTILISATEUR",
+                `SMS envoyé à ${user.email} (ID ${userId}) — ${data.subject}`
+            );
+
+
+            return res.status(201).json({
+
+                success: true,
+
+                count: 1,
+
+                sms_id:
+                    savedSms.id,
+
+                sms:
+                    savedSms,
+
+                recipient: {
+
+                    id:
+                        user.id,
+
+                    nom:
+                        user.nom,
+
+                    email:
+                        user.email,
+
+                    telephone:
+                        user.telephone
+
+                },
+
+                status:
+                    "sent"
+            });
+
+        } catch (error) {
+
+            if (
+                client &&
+                transactionStarted
+            ) {
+
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[SMS SEND] ROLLBACK :",
+                        rollbackError.message
+                    );
+                }
+            }
+
+
+            console.error(
+                "[SMS SEND] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de l'envoi du SMS",
+
+                error:
+                    error.message,
+
+                code:
+                    error.code || null
+            });
+
+        } finally {
+
+            if (client) {
+
+                client.release();
+            }
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — ENVOI À TOUS
+============================================================ */
+
+app.post(
+    "/api/admin/sms/send-all",
+    adminAuth,
+    async (req, res) => {
+
+        let client = null;
+        let transactionStarted = false;
+
+
+        try {
+
+            const data =
+                normalizeSmsData(
+                    req.body
+                );
+
+
+            if (!data.message) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le message SMS est vide"
+                });
+            }
+
+
+            client =
+                await pool.connect();
+
+
+            const usersResult =
+                await client.query(
+                    `
+                    SELECT
+                        id,
+                        nom,
+                        email
+
+                    FROM users
+
+                    ORDER BY id ASC
+                    `
+                );
+
+
+            if (
+                usersResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Aucun utilisateur trouvé",
+
+                    count: 0
+                });
+            }
+
+
+            await client.query(
+                "BEGIN"
+            );
+
+            transactionStarted = true;
+
+
+            let inserted = 0;
+
+
+            for (
+                const user
+                of usersResult.rows
+            ) {
+
+                await createSmsMessage(
+                    client,
+                    {
+
+                        recipientUserId:
+                            user.id,
+
+                        subject:
+                            data.subject,
+
+                        message:
+                            data.message,
+
+                        priority:
+                            data.priority,
+
+                        audience:
+                            "all"
+
+                    }
+                );
+
+
+                await client.query(
+                    `
+                    INSERT INTO user_activity
+                    (
+                        user_id,
+                        action,
+                        details,
+                        created_at
+                    )
+                    VALUES
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        CURRENT_TIMESTAMP
+                    )
+                    `,
+                    [
+
+                        user.id,
+
+                        "SMS_ADMIN_RECU",
+
+                        `SMS général : ${data.subject}`
+
+                    ]
+                );
+
+
+                inserted++;
+            }
+
+
+            await client.query(
+                "COMMIT"
+            );
+
+            transactionStarted = false;
+
+
+            for (
+                const user
+                of usersResult.rows
+            ) {
+
+                await createNotification(
+                    pool,
+                    user.id,
+                    data.subject,
+                    data.message,
+                    data.priority === "urgent"
+                        ? "urgent"
+                        : "message"
+                );
+            }
+
+
+            await safeLogAdminAction(
+                "SMS_TOUS",
+                `SMS envoyé à ${inserted} utilisateur(s) — ${data.subject}`
+            );
+
+
+            return res.status(201).json({
+
+                success: true,
+
+                count:
+                    inserted,
+
+                message:
+                    `${inserted} SMS envoyé(s) avec succès`
+            });
+
+        } catch (error) {
+
+            if (
+                client &&
+                transactionStarted
+            ) {
+
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[SMS ALL] ROLLBACK :",
+                        rollbackError.message
+                    );
+                }
+            }
+
+
+            console.error(
+                "[SMS ALL] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de l'envoi des SMS",
+
+                error:
+                    error.message,
+
+                code:
+                    error.code || null
+            });
+
+        } finally {
+
+            if (client) {
+
+                client.release();
+            }
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — ENVOI PREMIUM
+============================================================ */
+
+app.post(
+    "/api/admin/sms/send-premium",
+    adminAuth,
+    async (req, res) => {
+
+        let client = null;
+        let transactionStarted = false;
+
+
+        try {
+
+            const data =
+                normalizeSmsData(
+                    req.body
+                );
+
+
+            if (!data.message) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le message SMS est vide"
+                });
+            }
+
+
+            client =
+                await pool.connect();
+
+
+            const usersResult =
+                await client.query(
+                    `
+                    SELECT
+                        id,
+                        nom,
+                        email
+
+                    FROM users
+
+                    WHERE
+                        COALESCE(
+                            is_premium,
+                            FALSE
+                        ) = TRUE
+
+                    ORDER BY id ASC
+                    `
+                );
+
+
+            if (
+                usersResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Aucun utilisateur Premium trouvé",
+
+                    count: 0
+                });
+            }
+
+
+            await client.query(
+                "BEGIN"
+            );
+
+            transactionStarted = true;
+
+
+            let inserted = 0;
+
+
+            for (
+                const user
+                of usersResult.rows
+            ) {
+
+                await createSmsMessage(
+                    client,
+                    {
+
+                        recipientUserId:
+                            user.id,
+
+                        subject:
+                            data.subject,
+
+                        message:
+                            data.message,
+
+                        priority:
+                            data.priority,
+
+                        audience:
+                            "premium"
+
+                    }
+                );
+
+
+                await client.query(
+                    `
+                    INSERT INTO user_activity
+                    (
+                        user_id,
+                        action,
+                        details,
+                        created_at
+                    )
+                    VALUES
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        CURRENT_TIMESTAMP
+                    )
+                    `,
+                    [
+
+                        user.id,
+
+                        "SMS_ADMIN_RECU",
+
+                        `SMS Premium : ${data.subject}`
+
+                    ]
+                );
+
+
+                inserted++;
+            }
+
+
+            await client.query(
+                "COMMIT"
+            );
+
+            transactionStarted = false;
+
+
+            for (
+                const user
+                of usersResult.rows
+            ) {
+
+                await createNotification(
+                    pool,
+                    user.id,
+                    data.subject,
+                    data.message,
+                    data.priority === "urgent"
+                        ? "urgent"
+                        : "message"
+                );
+            }
+
+
+            await safeLogAdminAction(
+                "SMS_PREMIUM",
+                `SMS envoyé à ${inserted} Premium(s) — ${data.subject}`
+            );
+
+
+            return res.status(201).json({
+
+                success: true,
+
+                count:
+                    inserted,
+
+                message:
+                    `${inserted} SMS Premium envoyé(s)`
+            });
+
+        } catch (error) {
+
+            if (
+                client &&
+                transactionStarted
+            ) {
+
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[SMS PREMIUM] ROLLBACK :",
+                        rollbackError.message
+                    );
+                }
+            }
+
+
+            console.error(
+                "[SMS PREMIUM] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de l'envoi aux Premium",
+
+                error:
+                    error.message,
+
+                code:
+                    error.code || null
+            });
+
+        } finally {
+
+            if (client) {
+
+                client.release();
+            }
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — ENVOI STANDARD
+============================================================ */
+
+app.post(
+    "/api/admin/sms/send-standard",
+    adminAuth,
+    async (req, res) => {
+
+        let client = null;
+        let transactionStarted = false;
+
+
+        try {
+
+            const data =
+                normalizeSmsData(
+                    req.body
+                );
+
+
+            if (!data.message) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le message SMS est vide"
+                });
+            }
+
+
+            client =
+                await pool.connect();
+
+
+            const usersResult =
+                await client.query(
+                    `
+                    SELECT
+                        id,
+                        nom,
+                        email
+
+                    FROM users
+
+                    WHERE
+                        COALESCE(
+                            is_premium,
+                            FALSE
+                        ) = FALSE
+
+                    ORDER BY id ASC
+                    `
+                );
+
+
+            if (
+                usersResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Aucun utilisateur Standard trouvé",
+
+                    count: 0
+                });
+            }
+
+
+            await client.query(
+                "BEGIN"
+            );
+
+            transactionStarted = true;
+
+
+            let inserted = 0;
+
+
+            for (
+                const user
+                of usersResult.rows
+            ) {
+
+                await createSmsMessage(
+                    client,
+                    {
+
+                        recipientUserId:
+                            user.id,
+
+                        subject:
+                            data.subject,
+
+                        message:
+                            data.message,
+
+                        priority:
+                            data.priority,
+
+                        audience:
+                            "standard"
+
+                    }
+                );
+
+
+                await client.query(
+                    `
+                    INSERT INTO user_activity
+                    (
+                        user_id,
+                        action,
+                        details,
+                        created_at
+                    )
+                    VALUES
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        CURRENT_TIMESTAMP
+                    )
+                    `,
+                    [
+
+                        user.id,
+
+                        "SMS_ADMIN_RECU",
+
+                        `SMS Standard : ${data.subject}`
+
+                    ]
+                );
+
+
+                inserted++;
+            }
+
+
+            await client.query(
+                "COMMIT"
+            );
+
+            transactionStarted = false;
+
+
+            for (
+                const user
+                of usersResult.rows
+            ) {
+
+                await createNotification(
+                    pool,
+                    user.id,
+                    data.subject,
+                    data.message,
+                    data.priority === "urgent"
+                        ? "urgent"
+                        : "message"
+                );
+            }
+
+
+            await safeLogAdminAction(
+                "SMS_STANDARD",
+                `SMS envoyé à ${inserted} Standard(s) — ${data.subject}`
+            );
+
+
+            return res.status(201).json({
+
+                success: true,
+
+                count:
+                    inserted,
+
+                message:
+                    `${inserted} SMS Standard envoyé(s)`
+            });
+
+        } catch (error) {
+
+            if (
+                client &&
+                transactionStarted
+            ) {
+
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[SMS STANDARD] ROLLBACK :",
+                        rollbackError.message
+                    );
+                }
+            }
+
+
+            console.error(
+                "[SMS STANDARD] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de l'envoi aux utilisateurs Standard",
+
+                error:
+                    error.message,
+
+                code:
+                    error.code || null
+            });
+
+        } finally {
+
+            if (client) {
+
+                client.release();
+            }
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — LISTE DES UTILISATEURS
+============================================================ */
+
+app.get(
+    "/api/admin/sms/users",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const search =
+                clean(
+                    req.query.search
+                );
+
+
+            let result;
+
+
+            if (search) {
+
+                result =
+                    await pool.query(
+                        `
+                        SELECT
+
+                            id,
+                            nom,
+                            email,
+                            telephone,
+                            domaine,
+                            pays,
+                            ville,
+                            is_premium,
+                            is_blocked,
+                            progression
+
+                        FROM users
+
+                        WHERE
+
+                            CAST(id AS TEXT)
+                                ILIKE $1
+
+                            OR nom ILIKE $1
+
+                            OR email ILIKE $1
+
+                            OR telephone ILIKE $1
+
+                            OR domaine ILIKE $1
+
+                            OR pays ILIKE $1
+
+                            OR ville ILIKE $1
+
+                        ORDER BY id DESC
+                        `,
+                        [
+
+                            `%${search}%`
+
+                        ]
+                    );
+
+            } else {
+
+                result =
+                    await pool.query(
+                        `
+                        SELECT
+
+                            id,
+                            nom,
+                            email,
+                            telephone,
+                            domaine,
+                            pays,
+                            ville,
+                            is_premium,
+                            is_blocked,
+                            progression
+
+                        FROM users
+
+                        ORDER BY id DESC
+                        `
+                    );
+            }
+
+
+            return res.json({
+
+                success: true,
+
+                count:
+                    result.rows.length,
+
+                users:
+                    result.rows
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS USERS] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur récupération utilisateurs SMS",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — CONVERSATION UTILISATEUR
+============================================================ */
+
+app.get(
+    "/api/admin/sms/conversation/:userId",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const userId =
+                Number(
+                    req.params.userId
+                );
+
+
+            if (
+                !Number.isInteger(userId) ||
+                userId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant utilisateur invalide"
+                });
+            }
+
+
+            const user =
+                await getSmsUser(
+                    pool,
+                    userId
+                );
+
+
+            if (!user) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable"
+                });
+            }
+
+
+            const messagesResult =
+                await pool.query(
+                    `
+                    SELECT
+
+                        id,
+
+                        sender_type,
+
+                        sender_id,
+
+                        recipient_user_id,
+
+                        subject,
+
+                        message,
+
+                        priority,
+
+                        audience,
+
+                        is_read,
+
+                        is_archived,
+
+                        parent_id,
+
+                        status,
+
+                        created_at,
+
+                        updated_at
+
+                    FROM sms_messages
+
+                    WHERE
+                        recipient_user_id = $1
+
+                    ORDER BY
+                        id ASC
+                    `,
+                    [userId]
+                );
+
+
+            const unreadResult =
+                await pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::INTEGER AS unread
+
+                    FROM sms_messages
+
+                    WHERE
+                        recipient_user_id = $1
+
+                    AND
+                        COALESCE(
+                            is_read,
+                            FALSE
+                        ) = FALSE
+                    `,
+                    [userId]
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                user,
+
+                count:
+                    messagesResult.rows.length,
+
+                unread:
+                    Number(
+                        unreadResult.rows[0].unread
+                    ) || 0,
+
+                messages:
+                    messagesResult.rows
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS CONVERSATION] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur récupération conversation SMS",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — MARQUER COMME LU
+============================================================ */
+
+app.patch(
+    "/api/admin/sms/:smsId/read",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide"
+                });
+            }
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sms_messages
+
+                    SET
+                        is_read = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
+
+                    WHERE id = $1
+
+                    RETURNING *
+                    `,
+                    [smsId]
+                );
+
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable"
+                });
+            }
+
+
+            return res.json({
+
+                success: true,
+
+                sms:
+                    result.rows[0],
+
+                message:
+                    "SMS marqué comme lu"
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS READ] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur marquage SMS",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — RÉPONDRE À UN SMS
+============================================================ */
+
+app.post(
+    "/api/admin/sms/:smsId/reply",
+    adminAuth,
+    async (req, res) => {
+
+        let client = null;
+        let transactionStarted = false;
+
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide"
+                });
+            }
+
+
+            const message =
+                normalizeSmsMessage(
+                    req.body?.message
+                );
+
+
+            if (!message) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "La réponse est vide"
+                });
+            }
+
+
+            client =
+                await pool.connect();
+
+
+            const parentResult =
+                await client.query(
+                    `
+                    SELECT *
+
+                    FROM sms_messages
+
+                    WHERE id = $1
+
+                    LIMIT 1
+                    `,
+                    [smsId]
+                );
+
+
+            if (
+                parentResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS parent introuvable"
+                });
+            }
+
+
+            const parent =
+                parentResult.rows[0];
+
+
+            const recipientUserId =
+                Number(
+                    parent.recipient_user_id
+                );
+
+
+            if (
+                !Number.isInteger(
+                    recipientUserId
+                ) ||
+                recipientUserId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Destinataire de la réponse invalide"
+                });
+            }
+
+
+            const user =
+                await getSmsUser(
+                    client,
+                    recipientUserId
+                );
+
+
+            if (!user) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur destinataire introuvable"
+                });
+            }
+
+
+            const subject =
+                normalizeSmsSubject(
+                    req.body?.subject ||
+                    `Re: ${parent.subject || "BMJ SERVICE"}`
+                );
+
+
+            const priority =
+                normalizeSmsPriority(
+                    req.body?.priority ||
+                    parent.priority
+                );
+
+
+            await client.query(
+                "BEGIN"
+            );
+
+            transactionStarted = true;
+
+
+            const replyResult =
+                await client.query(
+                    `
+                    INSERT INTO sms_messages
+                    (
+                        sender_type,
+                        sender_id,
+                        recipient_user_id,
+                        subject,
+                        message,
+                        priority,
+                        audience,
+                        is_read,
+                        is_archived,
+                        parent_id,
+                        status,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES
+                    (
+                        'admin',
+                        NULL,
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        'user',
+                        FALSE,
+                        FALSE,
+                        $5,
+                        'sent',
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP
+                    )
+
+                    RETURNING *
+                    `,
+                    [
+
+                        recipientUserId,
+
+                        subject,
+
+                        message,
+
+                        priority,
+
+                        parent.id
+
+                    ]
+                );
+
+
+            const reply =
+                replyResult.rows[0];
+
+
+            await client.query(
+                `
+                INSERT INTO user_activity
+                (
+                    user_id,
+                    action,
+                    details,
+                    created_at
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    CURRENT_TIMESTAMP
+                )
+                `,
+                [
+
+                    recipientUserId,
+
+                    "SMS_ADMIN_REPONSE",
+
+                    `Réponse SMS : ${subject}`
+
+                ]
+            );
+
+
+            await client.query(
+                `
+                UPDATE sms_messages
+
+                SET
+                    is_read = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
+
+                WHERE id = $1
+                `,
+                [parent.id]
+            );
+
+
+            await client.query(
+                "COMMIT"
+            );
+
+            transactionStarted = false;
+
+
+            await createNotification(
+                pool,
+                recipientUserId,
+                subject,
+                message,
+                priority === "urgent"
+                    ? "urgent"
+                    : "message"
+            );
+
+
+            await safeLogAdminAction(
+                "SMS_REPONSE",
+                `Réponse SMS envoyée à ${user.email} (ID ${recipientUserId})`
+            );
+
+
+            return res.status(201).json({
+
+                success: true,
+
+                sms:
+                    reply,
+
+                message:
+                    "Réponse SMS envoyée"
+            });
+
+        } catch (error) {
+
+            if (
+                client &&
+                transactionStarted
+            ) {
+
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[SMS REPLY] ROLLBACK :",
+                        rollbackError.message
+                    );
+                }
+            }
+
+
+            console.error(
+                "[SMS REPLY] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de la réponse SMS",
+
+                error:
+                    error.message,
+
+                code:
+                    error.code || null
+            });
+
+        } finally {
+
+            if (client) {
+
+                client.release();
+            }
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — STATISTIQUES
+============================================================ */
+
+app.get(
+    "/api/admin/sms/stats",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+
+                        COUNT(*)::INTEGER
+                            AS total,
+
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                COALESCE(
+                                    is_read,
+                                    FALSE
+                                ) = FALSE
+                        )::INTEGER
+                            AS unread,
+
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                COALESCE(
+                                    is_read,
+                                    FALSE
+                                ) = TRUE
+                        )::INTEGER
+                            AS read,
+
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                audience = 'all'
+                        )::INTEGER
+                            AS all_messages,
+
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                audience = 'premium'
+                        )::INTEGER
+                            AS premium,
+
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                audience = 'standard'
+                        )::INTEGER
+                            AS standard,
+
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                audience = 'user'
+                        )::INTEGER
+                            AS individual
+
+                    FROM sms_messages
+                    `
+                );
+
+
+            const row =
+                result.rows[0];
+
+
+            const stats = {
+
+                total:
+                    Number(row.total) || 0,
+
+                unread:
+                    Number(row.unread) || 0,
+
+                read:
+                    Number(row.read) || 0,
+
+                all:
+                    Number(row.all_messages) || 0,
+
+                premium:
+                    Number(row.premium) || 0,
+
+                standard:
+                    Number(row.standard) || 0,
+
+                individual:
+                    Number(row.individual) || 0
+            };
+
+
+            return res.json({
+
+                success: true,
+
+                stats,
+
+                data:
+                    stats
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS STATS] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur statistiques SMS",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — MESSAGES RÉCENTS
+============================================================ */
+
+app.get(
+    "/api/admin/sms/recent",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            let limit =
+                Number(
+                    req.query.limit
+                );
+
+
+            if (
+                !Number.isInteger(limit) ||
+                limit <= 0
+            ) {
+
+                limit = 50;
+            }
+
+
+            limit =
+                Math.min(
+                    limit,
+                    200
+                );
+
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+
+                        sms.id,
+
+                        sms.sender_type,
+
+                        sms.sender_id,
+
+                        sms.recipient_user_id,
+
+                        sms.subject,
+
+                        sms.message,
+
+                        sms.priority,
+
+                        sms.audience,
+
+                        sms.is_read,
+
+                        sms.is_archived,
+
+                        sms.parent_id,
+
+                        sms.status,
+
+                        sms.created_at,
+
+                        sms.updated_at,
+
+                        u.nom AS user_nom,
+
+                        u.email AS user_email,
+
+                        u.telephone AS user_telephone
+
+                    FROM sms_messages sms
+
+                    LEFT JOIN users u
+                        ON u.id =
+                           sms.recipient_user_id
+
+                    ORDER BY
+                        sms.id DESC
+
+                    LIMIT $1
+                    `,
+                    [limit]
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                count:
+                    result.rows.length,
+
+                messages:
+                    result.rows
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS RECENT] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur récupération SMS récents",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — DIAGNOSTIC
+============================================================ */
+
+app.get(
+    "/api/admin/sms/diagnostic",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const [
+
+                tableResult,
+
+                usersResult,
+
+                smsResult,
+
+                unreadResult,
+
+                readResult,
+
+                todayResult,
+
+                premiumResult,
+
+                standardResult
+
+            ] =
+                await Promise.all([
+
+                    pool.query(
+                        `
+                        SELECT
+                            to_regclass(
+                                'public.sms_messages'
+                            ) AS table_name
+                        `
+                    ),
+
+                    pool.query(
+                        `
+                        SELECT
+                            COUNT(*)::INTEGER AS total
+                        FROM users
+                        `
+                    ),
+
+                    pool.query(
+                        `
+                        SELECT
+                            COUNT(*)::INTEGER AS total
+                        FROM sms_messages
+                        `
+                    ),
+
+                    pool.query(
+                        `
+                        SELECT
+                            COUNT(*)::INTEGER AS total
+
+                        FROM sms_messages
+
+                        WHERE
+                            COALESCE(
+                                is_read,
+                                FALSE
+                            ) = FALSE
+                        `
+                    ),
+
+                    pool.query(
+                        `
+                        SELECT
+                            COUNT(*)::INTEGER AS total
+
+                        FROM sms_messages
+
+                        WHERE
+                            COALESCE(
+                                is_read,
+                                FALSE
+                            ) = TRUE
+                        `
+                    ),
+
+                    pool.query(
+                        `
+                        SELECT
+                            COUNT(*)::INTEGER AS total
+
+                        FROM sms_messages
+
+                        WHERE
+                            created_at::DATE =
+                            CURRENT_DATE
+                        `
+                    ),
+
+                    pool.query(
+                        `
+                        SELECT
+                            COUNT(*)::INTEGER AS total
+
+                        FROM sms_messages
+
+                        WHERE
+                            audience = 'premium'
+                        `
+                    ),
+
+                    pool.query(
+                        `
+                        SELECT
+                            COUNT(*)::INTEGER AS total
+
+                        FROM sms_messages
+
+                        WHERE
+                            audience = 'standard'
+                        `
+                    )
+
+                ]);
+
+
+            return res.json({
+
+                success: true,
+
+                database: {
+
+                    sms_table:
+                        tableResult.rows[0]
+                            .table_name !== null,
+
+                    users:
+                        Number(
+                            usersResult.rows[0].total
+                        ) || 0,
+
+                    sms:
+                        Number(
+                            smsResult.rows[0].total
+                        ) || 0,
+
+                    unread:
+                        Number(
+                            unreadResult.rows[0].total
+                        ) || 0,
+
+                    read:
+                        Number(
+                            readResult.rows[0].total
+                        ) || 0,
+
+                    today:
+                        Number(
+                            todayResult.rows[0].total
+                        ) || 0,
+
+                    premium:
+                        Number(
+                            premiumResult.rows[0].total
+                        ) || 0,
+
+                    standard:
+                        Number(
+                            standardResult.rows[0].total
+                        ) || 0
+                },
+
+                message:
+                    "Diagnostic SMS effectué"
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS DIAGNOSTIC] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur diagnostic SMS",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
 /* ============================================================
    MESSAGES — ENVOI AUX STANDARD
 ============================================================ */
