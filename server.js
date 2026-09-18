@@ -4280,19 +4280,29 @@ app.post(
 
 /* ============================================================
    ============================================================
-   NOUVEAU SYSTÈME SMS
+   NOUVEAU SYSTÈME SMS — COMPLET
    ============================================================
-   
-   À PARTIR D'ICI :
-   
-   La nouvelle page de messagerie utilisera UNIQUEMENT
-   ces routes.
-   
-   Table :
-   
+
+   TABLE UTILISÉE :
    sms_messages
-   
-   Les anciennes tables/messages ne sont pas utilisées ici.
+
+   IMPORTANT :
+   - L'ancien système "messages" n'est pas utilisé ici.
+   - Les utilisateurs existants ne sont jamais supprimés.
+   - Les SMS peuvent être :
+        • envoyés
+        • lus
+        • répondus
+        • modifiés par l'admin
+        • supprimés individuellement
+        • archivés
+        • restaurés
+   - L'utilisateur peut :
+        • consulter ses SMS
+        • lire ses SMS
+        • répondre
+        • marquer tous ses SMS comme lus
+
 ============================================================ */
 
 
@@ -4305,38 +4315,174 @@ async function getSmsUser(
     userId
 ) {
 
+    const numericUserId = Number(userId);
+
+    if (
+        !Number.isInteger(numericUserId) ||
+        numericUserId <= 0
+    ) {
+        return null;
+    }
+
     const result =
         await clientOrPool.query(
             `
             SELECT
-
                 id,
                 nom,
                 email,
                 telephone,
+                photo,
                 domaine,
                 pays,
                 ville,
+                niveau,
                 is_premium,
                 is_blocked,
                 progression
-
             FROM users
-
             WHERE id = $1
-
             LIMIT 1
             `,
-            [userId]
+            [numericUserId]
         );
-
 
     return result.rows[0] || null;
 }
 
 
 /* ============================================================
-   UTILITAIRE — CRÉER SMS
+   UTILITAIRE — IDENTIFIANT UTILISATEUR SMS
+============================================================ */
+
+function getSmsUserIdFromRequest(req) {
+
+    const possibleId =
+        req.body?.user_id ??
+        req.body?.userId ??
+        req.headers["x-user-id"] ??
+        req.headers["x-userid"] ??
+        req.headers["x-bmj-user-id"] ??
+        req.query?.user_id ??
+        req.query?.userId;
+
+    const userId =
+        Number(possibleId);
+
+    if (
+        !Number.isInteger(userId) ||
+        userId <= 0
+    ) {
+        return null;
+    }
+
+    return userId;
+}
+
+
+/* ============================================================
+   AUTHENTIFICATION UTILISATEUR SMS
+============================================================ */
+
+async function userSmsAuth(
+    req,
+    res,
+    next
+) {
+
+    try {
+
+        const userId =
+            getSmsUserIdFromRequest(req);
+
+
+        if (!userId) {
+
+            return res.status(401).json({
+
+                success: false,
+
+                message:
+                    "Utilisateur non identifié.",
+
+                code:
+                    "SMS_USER_ID_MISSING"
+            });
+        }
+
+
+        const user =
+            await getSmsUser(
+                pool,
+                userId
+            );
+
+
+        if (!user) {
+
+            return res.status(401).json({
+
+                success: false,
+
+                message:
+                    "Utilisateur introuvable.",
+
+                code:
+                    "SMS_USER_NOT_FOUND"
+            });
+        }
+
+
+        if (
+            user.is_blocked === true
+        ) {
+
+            return res.status(403).json({
+
+                success: false,
+
+                message:
+                    "Votre compte est bloqué.",
+
+                code:
+                    "SMS_USER_BLOCKED"
+            });
+        }
+
+
+        req.smsUser =
+            user;
+
+        req.smsUserId =
+            user.id;
+
+
+        next();
+
+    } catch (error) {
+
+        console.error(
+            "[SMS USER AUTH] ERREUR :",
+            error
+        );
+
+
+        return res.status(500).json({
+
+            success: false,
+
+            message:
+                "Erreur d'authentification utilisateur.",
+
+            error:
+                error.message
+        });
+    }
+}
+
+
+/* ============================================================
+   UTILITAIRE — CRÉER UN SMS ADMIN
 ============================================================ */
 
 async function createSmsMessage(
@@ -4438,28 +4584,72 @@ async function createSmsMessage(
                 CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             )
-
             RETURNING *
             `,
             [
-
                 recipientUserId,
-
                 subject,
-
                 message,
-
                 priority,
-
                 audience,
-
                 parentId
-
             ]
         );
 
 
     return result.rows[0];
+}
+
+
+/* ============================================================
+   UTILITAIRE — CRÉER ACTIVITÉ UTILISATEUR
+============================================================ */
+
+async function createSmsUserActivity(
+    client,
+    userId,
+    action,
+    details
+) {
+
+    try {
+
+        await client.query(
+            `
+            INSERT INTO user_activity
+            (
+                user_id,
+                action,
+                details,
+                created_at
+            )
+            VALUES
+            (
+                $1,
+                $2,
+                $3,
+                CURRENT_TIMESTAMP
+            )
+            `,
+            [
+                userId,
+                action,
+                details
+            ]
+        );
+
+    } catch (error) {
+
+        console.error(
+            "[SMS USER ACTIVITY] ERREUR :",
+            error.message
+        );
+
+        /*
+         * On ne fait pas échouer le SMS uniquement
+         * parce que l'activité n'a pas pu être enregistrée.
+         */
+    }
 }
 
 
@@ -4475,18 +4665,15 @@ app.post(
         let client = null;
         let transactionStarted = false;
 
-
         try {
 
             const userId =
-                getSmsUserId(
-                    req.body
-                );
+                getSmsUserIdFromRequest(req);
 
 
             const data =
                 normalizeSmsData(
-                    req.body
+                    req.body || {}
                 );
 
 
@@ -4497,7 +4684,7 @@ app.post(
                     success: false,
 
                     message:
-                        "Identifiant utilisateur manquant",
+                        "Identifiant utilisateur manquant.",
 
                     code:
                         "SMS_USER_ID_MISSING"
@@ -4512,7 +4699,7 @@ app.post(
                     success: false,
 
                     message:
-                        "Le message SMS est vide",
+                        "Le message SMS est vide.",
 
                     code:
                         "SMS_MESSAGE_EMPTY"
@@ -4538,10 +4725,27 @@ app.post(
                     success: false,
 
                     message:
-                        "Utilisateur introuvable",
+                        "Utilisateur introuvable.",
 
                     code:
                         "SMS_USER_NOT_FOUND"
+                });
+            }
+
+
+            if (
+                user.is_blocked === true
+            ) {
+
+                return res.status(403).json({
+
+                    success: false,
+
+                    message:
+                        "Impossible d'envoyer un SMS à un utilisateur bloqué.",
+
+                    code:
+                        "SMS_USER_BLOCKED"
                 });
             }
 
@@ -4557,7 +4761,6 @@ app.post(
                 await createSmsMessage(
                     client,
                     {
-
                         recipientUserId:
                             userId,
 
@@ -4572,37 +4775,15 @@ app.post(
 
                         audience:
                             "user"
-
                     }
                 );
 
 
-            await client.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details,
-                    created_at
-                )
-                VALUES
-                (
-                    $1,
-                    $2,
-                    $3,
-                    CURRENT_TIMESTAMP
-                )
-                `,
-                [
-
-                    userId,
-
-                    "SMS_ADMIN_RECU",
-
-                    `SMS reçu : ${data.subject}`
-
-                ]
+            await createSmsUserActivity(
+                client,
+                userId,
+                "SMS_ADMIN_RECU",
+                `SMS reçu : ${data.subject || "Sans objet"}`
             );
 
 
@@ -4613,14 +4794,10 @@ app.post(
             transactionStarted = false;
 
 
-            /*
-             * Notification après COMMIT.
-             */
-
             await createNotification(
                 pool,
                 userId,
-                data.subject,
+                data.subject || "Nouveau message",
                 data.message,
                 data.priority === "urgent"
                     ? "urgent"
@@ -4630,7 +4807,7 @@ app.post(
 
             await safeLogAdminAction(
                 "SMS_UTILISATEUR",
-                `SMS envoyé à ${user.email} (ID ${userId}) — ${data.subject}`
+                `SMS envoyé à ${user.email} (ID ${userId}) — ${data.subject || "Sans objet"}`
             );
 
 
@@ -4659,7 +4836,6 @@ app.post(
 
                     telephone:
                         user.telephone
-
                 },
 
                 status:
@@ -4700,7 +4876,7 @@ app.post(
                 success: false,
 
                 message:
-                    "Erreur lors de l'envoi du SMS",
+                    "Erreur lors de l'envoi du SMS.",
 
                 error:
                     error.message,
@@ -4732,12 +4908,11 @@ app.post(
         let client = null;
         let transactionStarted = false;
 
-
         try {
 
             const data =
                 normalizeSmsData(
-                    req.body
+                    req.body || {}
                 );
 
 
@@ -4748,7 +4923,7 @@ app.post(
                     success: false,
 
                     message:
-                        "Le message SMS est vide"
+                        "Le message SMS est vide."
                 });
             }
 
@@ -4763,10 +4938,9 @@ app.post(
                     SELECT
                         id,
                         nom,
-                        email
-
+                        email,
+                        is_blocked
                     FROM users
-
                     ORDER BY id ASC
                     `
                 );
@@ -4781,7 +4955,30 @@ app.post(
                     success: false,
 
                     message:
-                        "Aucun utilisateur trouvé",
+                        "Aucun utilisateur trouvé.",
+
+                    count: 0
+                });
+            }
+
+
+            const users =
+                usersResult.rows.filter(
+                    user =>
+                        user.is_blocked !== true
+                );
+
+
+            if (
+                users.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Aucun utilisateur actif trouvé.",
 
                     count: 0
                 });
@@ -4800,13 +4997,12 @@ app.post(
 
             for (
                 const user
-                of usersResult.rows
+                of users
             ) {
 
                 await createSmsMessage(
                     client,
                     {
-
                         recipientUserId:
                             user.id,
 
@@ -4821,37 +5017,15 @@ app.post(
 
                         audience:
                             "all"
-
                     }
                 );
 
 
-                await client.query(
-                    `
-                    INSERT INTO user_activity
-                    (
-                        user_id,
-                        action,
-                        details,
-                        created_at
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        CURRENT_TIMESTAMP
-                    )
-                    `,
-                    [
-
-                        user.id,
-
-                        "SMS_ADMIN_RECU",
-
-                        `SMS général : ${data.subject}`
-
-                    ]
+                await createSmsUserActivity(
+                    client,
+                    user.id,
+                    "SMS_ADMIN_RECU",
+                    `SMS général : ${data.subject || "Sans objet"}`
                 );
 
 
@@ -4868,13 +5042,13 @@ app.post(
 
             for (
                 const user
-                of usersResult.rows
+                of users
             ) {
 
                 await createNotification(
                     pool,
                     user.id,
-                    data.subject,
+                    data.subject || "Nouveau message",
                     data.message,
                     data.priority === "urgent"
                         ? "urgent"
@@ -4885,7 +5059,7 @@ app.post(
 
             await safeLogAdminAction(
                 "SMS_TOUS",
-                `SMS envoyé à ${inserted} utilisateur(s) — ${data.subject}`
+                `SMS envoyé à ${inserted} utilisateur(s) — ${data.subject || "Sans objet"}`
             );
 
 
@@ -4896,8 +5070,11 @@ app.post(
                 count:
                     inserted,
 
+                skipped_blocked:
+                    usersResult.rows.length - users.length,
+
                 message:
-                    `${inserted} SMS envoyé(s) avec succès`
+                    `${inserted} SMS envoyé(s) avec succès.`
             });
 
         } catch (error) {
@@ -4934,7 +5111,7 @@ app.post(
                 success: false,
 
                 message:
-                    "Erreur lors de l'envoi des SMS",
+                    "Erreur lors de l'envoi des SMS.",
 
                 error:
                     error.message,
@@ -4966,12 +5143,11 @@ app.post(
         let client = null;
         let transactionStarted = false;
 
-
         try {
 
             const data =
                 normalizeSmsData(
-                    req.body
+                    req.body || {}
                 );
 
 
@@ -4982,7 +5158,7 @@ app.post(
                     success: false,
 
                     message:
-                        "Le message SMS est vide"
+                        "Le message SMS est vide."
                 });
             }
 
@@ -4997,23 +5173,24 @@ app.post(
                     SELECT
                         id,
                         nom,
-                        email
-
+                        email,
+                        is_blocked
                     FROM users
-
-                    WHERE
-                        COALESCE(
-                            is_premium,
-                            FALSE
-                        ) = TRUE
-
+                    WHERE COALESCE(is_premium, FALSE) = TRUE
                     ORDER BY id ASC
                     `
                 );
 
 
+            const users =
+                usersResult.rows.filter(
+                    user =>
+                        user.is_blocked !== true
+                );
+
+
             if (
-                usersResult.rows.length === 0
+                users.length === 0
             ) {
 
                 return res.status(404).json({
@@ -5021,7 +5198,7 @@ app.post(
                     success: false,
 
                     message:
-                        "Aucun utilisateur Premium trouvé",
+                        "Aucun utilisateur Premium actif trouvé.",
 
                     count: 0
                 });
@@ -5040,13 +5217,12 @@ app.post(
 
             for (
                 const user
-                of usersResult.rows
+                of users
             ) {
 
                 await createSmsMessage(
                     client,
                     {
-
                         recipientUserId:
                             user.id,
 
@@ -5061,37 +5237,15 @@ app.post(
 
                         audience:
                             "premium"
-
                     }
                 );
 
 
-                await client.query(
-                    `
-                    INSERT INTO user_activity
-                    (
-                        user_id,
-                        action,
-                        details,
-                        created_at
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        CURRENT_TIMESTAMP
-                    )
-                    `,
-                    [
-
-                        user.id,
-
-                        "SMS_ADMIN_RECU",
-
-                        `SMS Premium : ${data.subject}`
-
-                    ]
+                await createSmsUserActivity(
+                    client,
+                    user.id,
+                    "SMS_ADMIN_RECU",
+                    `SMS Premium : ${data.subject || "Sans objet"}`
                 );
 
 
@@ -5108,13 +5262,13 @@ app.post(
 
             for (
                 const user
-                of usersResult.rows
+                of users
             ) {
 
                 await createNotification(
                     pool,
                     user.id,
-                    data.subject,
+                    data.subject || "Nouveau message Premium",
                     data.message,
                     data.priority === "urgent"
                         ? "urgent"
@@ -5125,7 +5279,7 @@ app.post(
 
             await safeLogAdminAction(
                 "SMS_PREMIUM",
-                `SMS envoyé à ${inserted} Premium(s) — ${data.subject}`
+                `SMS envoyé à ${inserted} Premium(s) — ${data.subject || "Sans objet"}`
             );
 
 
@@ -5137,7 +5291,7 @@ app.post(
                     inserted,
 
                 message:
-                    `${inserted} SMS Premium envoyé(s)`
+                    `${inserted} SMS Premium envoyé(s).`
             });
 
         } catch (error) {
@@ -5174,7 +5328,7 @@ app.post(
                 success: false,
 
                 message:
-                    "Erreur lors de l'envoi aux Premium",
+                    "Erreur lors de l'envoi aux Premium.",
 
                 error:
                     error.message,
@@ -5206,12 +5360,11 @@ app.post(
         let client = null;
         let transactionStarted = false;
 
-
         try {
 
             const data =
                 normalizeSmsData(
-                    req.body
+                    req.body || {}
                 );
 
 
@@ -5222,7 +5375,7 @@ app.post(
                     success: false,
 
                     message:
-                        "Le message SMS est vide"
+                        "Le message SMS est vide."
                 });
             }
 
@@ -5237,23 +5390,24 @@ app.post(
                     SELECT
                         id,
                         nom,
-                        email
-
+                        email,
+                        is_blocked
                     FROM users
-
-                    WHERE
-                        COALESCE(
-                            is_premium,
-                            FALSE
-                        ) = FALSE
-
+                    WHERE COALESCE(is_premium, FALSE) = FALSE
                     ORDER BY id ASC
                     `
                 );
 
 
+            const users =
+                usersResult.rows.filter(
+                    user =>
+                        user.is_blocked !== true
+                );
+
+
             if (
-                usersResult.rows.length === 0
+                users.length === 0
             ) {
 
                 return res.status(404).json({
@@ -5261,7 +5415,7 @@ app.post(
                     success: false,
 
                     message:
-                        "Aucun utilisateur Standard trouvé",
+                        "Aucun utilisateur Standard actif trouvé.",
 
                     count: 0
                 });
@@ -5280,13 +5434,12 @@ app.post(
 
             for (
                 const user
-                of usersResult.rows
+                of users
             ) {
 
                 await createSmsMessage(
                     client,
                     {
-
                         recipientUserId:
                             user.id,
 
@@ -5301,37 +5454,15 @@ app.post(
 
                         audience:
                             "standard"
-
                     }
                 );
 
 
-                await client.query(
-                    `
-                    INSERT INTO user_activity
-                    (
-                        user_id,
-                        action,
-                        details,
-                        created_at
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        CURRENT_TIMESTAMP
-                    )
-                    `,
-                    [
-
-                        user.id,
-
-                        "SMS_ADMIN_RECU",
-
-                        `SMS Standard : ${data.subject}`
-
-                    ]
+                await createSmsUserActivity(
+                    client,
+                    user.id,
+                    "SMS_ADMIN_RECU",
+                    `SMS Standard : ${data.subject || "Sans objet"}`
                 );
 
 
@@ -5348,13 +5479,13 @@ app.post(
 
             for (
                 const user
-                of usersResult.rows
+                of users
             ) {
 
                 await createNotification(
                     pool,
                     user.id,
-                    data.subject,
+                    data.subject || "Nouveau message",
                     data.message,
                     data.priority === "urgent"
                         ? "urgent"
@@ -5365,7 +5496,7 @@ app.post(
 
             await safeLogAdminAction(
                 "SMS_STANDARD",
-                `SMS envoyé à ${inserted} Standard(s) — ${data.subject}`
+                `SMS envoyé à ${inserted} Standard(s) — ${data.subject || "Sans objet"}`
             );
 
 
@@ -5377,7 +5508,7 @@ app.post(
                     inserted,
 
                 message:
-                    `${inserted} SMS Standard envoyé(s)`
+                    `${inserted} SMS Standard envoyé(s).`
             });
 
         } catch (error) {
@@ -5414,7 +5545,7 @@ app.post(
                 success: false,
 
                 message:
-                    "Erreur lors de l'envoi aux utilisateurs Standard",
+                    "Erreur lors de l'envoi aux utilisateurs Standard.",
 
                 error:
                     error.message,
@@ -5447,7 +5578,7 @@ app.get(
 
             const search =
                 clean(
-                    req.query.search
+                    req.query.search || ""
                 );
 
 
@@ -5460,7 +5591,6 @@ app.get(
                     await pool.query(
                         `
                         SELECT
-
                             id,
                             nom,
                             email,
@@ -5471,32 +5601,19 @@ app.get(
                             is_premium,
                             is_blocked,
                             progression
-
                         FROM users
-
                         WHERE
-
-                            CAST(id AS TEXT)
-                                ILIKE $1
-
+                            CAST(id AS TEXT) ILIKE $1
                             OR nom ILIKE $1
-
                             OR email ILIKE $1
-
                             OR telephone ILIKE $1
-
                             OR domaine ILIKE $1
-
                             OR pays ILIKE $1
-
                             OR ville ILIKE $1
-
                         ORDER BY id DESC
                         `,
                         [
-
                             `%${search}%`
-
                         ]
                     );
 
@@ -5506,7 +5623,6 @@ app.get(
                     await pool.query(
                         `
                         SELECT
-
                             id,
                             nom,
                             email,
@@ -5517,9 +5633,7 @@ app.get(
                             is_premium,
                             is_blocked,
                             progression
-
                         FROM users
-
                         ORDER BY id DESC
                         `
                     );
@@ -5550,7 +5664,7 @@ app.get(
                 success: false,
 
                 message:
-                    "Erreur récupération utilisateurs SMS",
+                    "Erreur récupération utilisateurs SMS.",
 
                 error:
                     error.message
@@ -5561,7 +5675,7 @@ app.get(
 
 
 /* ============================================================
-   SMS — CONVERSATION UTILISATEUR
+   SMS — CONVERSATION ADMIN
 ============================================================ */
 
 app.get(
@@ -5587,7 +5701,7 @@ app.get(
                     success: false,
 
                     message:
-                        "Identifiant utilisateur invalide"
+                        "Identifiant utilisateur invalide."
                 });
             }
 
@@ -5606,7 +5720,7 @@ app.get(
                     success: false,
 
                     message:
-                        "Utilisateur introuvable"
+                        "Utilisateur introuvable."
                 });
             }
 
@@ -5615,42 +5729,23 @@ app.get(
                 await pool.query(
                     `
                     SELECT
-
                         id,
-
                         sender_type,
-
                         sender_id,
-
                         recipient_user_id,
-
                         subject,
-
                         message,
-
                         priority,
-
                         audience,
-
                         is_read,
-
                         is_archived,
-
                         parent_id,
-
                         status,
-
                         created_at,
-
                         updated_at
-
                     FROM sms_messages
-
-                    WHERE
-                        recipient_user_id = $1
-
-                    ORDER BY
-                        id ASC
+                    WHERE recipient_user_id = $1
+                    ORDER BY created_at ASC, id ASC
                     `,
                     [userId]
                 );
@@ -5661,17 +5756,11 @@ app.get(
                     `
                     SELECT
                         COUNT(*)::INTEGER AS unread
-
                     FROM sms_messages
-
                     WHERE
                         recipient_user_id = $1
-
-                    AND
-                        COALESCE(
-                            is_read,
-                            FALSE
-                        ) = FALSE
+                        AND COALESCE(is_read, FALSE) = FALSE
+                        AND COALESCE(is_archived, FALSE) = FALSE
                     `,
                     [userId]
                 );
@@ -5688,7 +5777,7 @@ app.get(
 
                 unread:
                     Number(
-                        unreadResult.rows[0].unread
+                        unreadResult.rows[0]?.unread
                     ) || 0,
 
                 messages:
@@ -5708,7 +5797,7 @@ app.get(
                 success: false,
 
                 message:
-                    "Erreur récupération conversation SMS",
+                    "Erreur récupération conversation SMS.",
 
                 error:
                     error.message
@@ -5719,7 +5808,7 @@ app.get(
 
 
 /* ============================================================
-   SMS — MARQUER COMME LU
+   SMS — MARQUER COMME LU — ADMIN
 ============================================================ */
 
 app.patch(
@@ -5745,7 +5834,7 @@ app.patch(
                     success: false,
 
                     message:
-                        "Identifiant SMS invalide"
+                        "Identifiant SMS invalide."
                 });
             }
 
@@ -5754,13 +5843,10 @@ app.patch(
                 await pool.query(
                     `
                     UPDATE sms_messages
-
                     SET
                         is_read = TRUE,
                         updated_at = CURRENT_TIMESTAMP
-
                     WHERE id = $1
-
                     RETURNING *
                     `,
                     [smsId]
@@ -5776,7 +5862,7 @@ app.patch(
                     success: false,
 
                     message:
-                        "SMS introuvable"
+                        "SMS introuvable."
                 });
             }
 
@@ -5789,13 +5875,13 @@ app.patch(
                     result.rows[0],
 
                 message:
-                    "SMS marqué comme lu"
+                    "SMS marqué comme lu."
             });
 
         } catch (error) {
 
             console.error(
-                "[SMS READ] ERREUR :",
+                "[SMS READ ADMIN] ERREUR :",
                 error
             );
 
@@ -5805,7 +5891,7 @@ app.patch(
                 success: false,
 
                 message:
-                    "Erreur marquage SMS",
+                    "Erreur marquage SMS.",
 
                 error:
                     error.message
@@ -5816,17 +5902,13 @@ app.patch(
 
 
 /* ============================================================
-   SMS — RÉPONDRE À UN SMS
+   SMS — MODIFIER UN SMS — ADMIN
 ============================================================ */
 
-app.post(
-    "/api/admin/sms/:smsId/reply",
+app.patch(
+    "/api/admin/sms/:smsId",
     adminAuth,
     async (req, res) => {
-
-        let client = null;
-        let transactionStarted = false;
-
 
         try {
 
@@ -5846,7 +5928,493 @@ app.post(
                     success: false,
 
                     message:
-                        "Identifiant SMS invalide"
+                        "Identifiant SMS invalide."
+                });
+            }
+
+
+            const existingResult =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM sms_messages
+                    WHERE id = $1
+                    LIMIT 1
+                    `,
+                    [smsId]
+                );
+
+
+            if (
+                existingResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable."
+                });
+            }
+
+
+            const existing =
+                existingResult.rows[0];
+
+
+            const subject =
+                req.body?.subject !== undefined
+                    ? normalizeSmsSubject(
+                        req.body.subject
+                    )
+                    : normalizeSmsSubject(
+                        existing.subject
+                    );
+
+
+            const message =
+                req.body?.message !== undefined
+                    ? normalizeSmsMessage(
+                        req.body.message
+                    )
+                    : normalizeSmsMessage(
+                        existing.message
+                    );
+
+
+            const priority =
+                req.body?.priority !== undefined
+                    ? normalizeSmsPriority(
+                        req.body.priority
+                    )
+                    : normalizeSmsPriority(
+                        existing.priority
+                    );
+
+
+            if (!message) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Le message SMS ne peut pas être vide."
+                });
+            }
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sms_messages
+                    SET
+                        subject = $1,
+                        message = $2,
+                        priority = $3,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $4
+                    RETURNING *
+                    `,
+                    [
+                        subject,
+                        message,
+                        priority,
+                        smsId
+                    ]
+                );
+
+
+            await safeLogAdminAction(
+                "SMS_MODIFICATION",
+                `SMS #${smsId} modifié.`
+            );
+
+
+            return res.json({
+
+                success: true,
+
+                sms:
+                    result.rows[0],
+
+                message:
+                    "SMS modifié avec succès."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS EDIT] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de la modification du SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — SUPPRIMER UN SMS — ADMIN
+============================================================ */
+
+app.delete(
+    "/api/admin/sms/:smsId",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide."
+                });
+            }
+
+
+            const existingResult =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        recipient_user_id,
+                        subject,
+                        message
+                    FROM sms_messages
+                    WHERE id = $1
+                    LIMIT 1
+                    `,
+                    [smsId]
+                );
+
+
+            if (
+                existingResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable."
+                });
+            }
+
+
+            const sms =
+                existingResult.rows[0];
+
+
+            await pool.query(
+                `
+                DELETE FROM sms_messages
+                WHERE id = $1
+                `,
+                [smsId]
+            );
+
+
+            await safeLogAdminAction(
+                "SMS_SUPPRESSION",
+                `SMS #${smsId} supprimé pour l'utilisateur ID ${sms.recipient_user_id}.`
+            );
+
+
+            return res.json({
+
+                success: true,
+
+                deleted:
+                    true,
+
+                sms_id:
+                    smsId,
+
+                message:
+                    "SMS supprimé avec succès."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS DELETE] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de la suppression du SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — ARCHIVER
+============================================================ */
+
+app.patch(
+    "/api/admin/sms/:smsId/archive",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide."
+                });
+            }
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sms_messages
+                    SET
+                        is_archived = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                    RETURNING *
+                    `,
+                    [smsId]
+                );
+
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable."
+                });
+            }
+
+
+            await safeLogAdminAction(
+                "SMS_ARCHIVAGE",
+                `SMS #${smsId} archivé.`
+            );
+
+
+            return res.json({
+
+                success: true,
+
+                sms:
+                    result.rows[0],
+
+                message:
+                    "SMS archivé avec succès."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS ARCHIVE] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur archivage SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — RESTAURER
+============================================================ */
+
+app.patch(
+    "/api/admin/sms/:smsId/unarchive",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide."
+                });
+            }
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sms_messages
+                    SET
+                        is_archived = FALSE,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                    RETURNING *
+                    `,
+                    [smsId]
+                );
+
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable."
+                });
+            }
+
+
+            await safeLogAdminAction(
+                "SMS_RESTAURATION",
+                `SMS #${smsId} restauré.`
+            );
+
+
+            return res.json({
+
+                success: true,
+
+                sms:
+                    result.rows[0],
+
+                message:
+                    "SMS restauré avec succès."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS UNARCHIVE] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur restauration SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — RÉPONDRE — ADMIN
+============================================================ */
+
+app.post(
+    "/api/admin/sms/:smsId/reply",
+    adminAuth,
+    async (req, res) => {
+
+        let client = null;
+        let transactionStarted = false;
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide."
                 });
             }
 
@@ -5864,7 +6432,7 @@ app.post(
                     success: false,
 
                     message:
-                        "La réponse est vide"
+                        "La réponse est vide."
                 });
             }
 
@@ -5877,11 +6445,8 @@ app.post(
                 await client.query(
                     `
                     SELECT *
-
                     FROM sms_messages
-
                     WHERE id = $1
-
                     LIMIT 1
                     `,
                     [smsId]
@@ -5897,7 +6462,7 @@ app.post(
                     success: false,
 
                     message:
-                        "SMS parent introuvable"
+                        "SMS parent introuvable."
                 });
             }
 
@@ -5910,23 +6475,6 @@ app.post(
                 Number(
                     parent.recipient_user_id
                 );
-
-
-            if (
-                !Number.isInteger(
-                    recipientUserId
-                ) ||
-                recipientUserId <= 0
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Destinataire de la réponse invalide"
-                });
-            }
 
 
             const user =
@@ -5943,7 +6491,7 @@ app.post(
                     success: false,
 
                     message:
-                        "Utilisateur destinataire introuvable"
+                        "Utilisateur destinataire introuvable."
                 });
             }
 
@@ -5960,6 +6508,17 @@ app.post(
                     req.body?.priority ||
                     parent.priority
                 );
+
+
+            /*
+             * Toujours rattacher la réponse
+             * au message racine de la conversation.
+             */
+
+            const rootParentId =
+                parent.parent_id
+                    ? Number(parent.parent_id)
+                    : Number(parent.id);
 
 
             await client.query(
@@ -6004,21 +6563,14 @@ app.post(
                         CURRENT_TIMESTAMP,
                         CURRENT_TIMESTAMP
                     )
-
                     RETURNING *
                     `,
                     [
-
                         recipientUserId,
-
                         subject,
-
                         message,
-
                         priority,
-
-                        parent.id
-
+                        rootParentId
                     ]
                 );
 
@@ -6027,46 +6579,23 @@ app.post(
                 replyResult.rows[0];
 
 
-            await client.query(
-                `
-                INSERT INTO user_activity
-                (
-                    user_id,
-                    action,
-                    details,
-                    created_at
-                )
-                VALUES
-                (
-                    $1,
-                    $2,
-                    $3,
-                    CURRENT_TIMESTAMP
-                )
-                `,
-                [
-
-                    recipientUserId,
-
-                    "SMS_ADMIN_REPONSE",
-
-                    `Réponse SMS : ${subject}`
-
-                ]
+            await createSmsUserActivity(
+                client,
+                recipientUserId,
+                "SMS_ADMIN_REPONSE",
+                `Réponse SMS : ${subject}`
             );
 
 
             await client.query(
                 `
                 UPDATE sms_messages
-
                 SET
                     is_read = TRUE,
                     updated_at = CURRENT_TIMESTAMP
-
                 WHERE id = $1
                 `,
-                [parent.id]
+                [smsId]
             );
 
 
@@ -6090,7 +6619,7 @@ app.post(
 
             await safeLogAdminAction(
                 "SMS_REPONSE",
-                `Réponse SMS envoyée à ${user.email} (ID ${recipientUserId})`
+                `Réponse SMS envoyée à ${user.email} (ID ${recipientUserId}).`
             );
 
 
@@ -6102,7 +6631,7 @@ app.post(
                     reply,
 
                 message:
-                    "Réponse SMS envoyée"
+                    "Réponse SMS envoyée."
             });
 
         } catch (error) {
@@ -6121,7 +6650,7 @@ app.post(
                 } catch (rollbackError) {
 
                     console.error(
-                        "[SMS REPLY] ROLLBACK :",
+                        "[SMS ADMIN REPLY] ROLLBACK :",
                         rollbackError.message
                     );
                 }
@@ -6129,7 +6658,7 @@ app.post(
 
 
             console.error(
-                "[SMS REPLY] ERREUR :",
+                "[SMS ADMIN REPLY] ERREUR :",
                 error
             );
 
@@ -6139,7 +6668,7 @@ app.post(
                 success: false,
 
                 message:
-                    "Erreur lors de la réponse SMS",
+                    "Erreur lors de la réponse SMS.",
 
                 error:
                     error.message,
@@ -6160,7 +6689,113 @@ app.post(
 
 
 /* ============================================================
-   SMS — STATISTIQUES
+   SMS — SUPPRIMER TOUTE LA CONVERSATION D'UN UTILISATEUR
+   Suppression ciblée uniquement pour cet utilisateur.
+============================================================ */
+
+app.delete(
+    "/api/admin/sms/user/:userId",
+    adminAuth,
+    async (req, res) => {
+
+        try {
+
+            const userId =
+                Number(
+                    req.params.userId
+                );
+
+
+            if (
+                !Number.isInteger(userId) ||
+                userId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant utilisateur invalide."
+                });
+            }
+
+
+            const user =
+                await getSmsUser(
+                    pool,
+                    userId
+                );
+
+
+            if (!user) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "Utilisateur introuvable."
+                });
+            }
+
+
+            const result =
+                await pool.query(
+                    `
+                    DELETE FROM sms_messages
+                    WHERE recipient_user_id = $1
+                    RETURNING id
+                    `,
+                    [userId]
+                );
+
+
+            await safeLogAdminAction(
+                "SMS_SUPPRESSION_CONVERSATION",
+                `Conversation SMS de ${user.email} (ID ${userId}) supprimée — ${result.rows.length} message(s).`
+            );
+
+
+            return res.json({
+
+                success: true,
+
+                deleted:
+                    result.rows.length,
+
+                user_id:
+                    userId,
+
+                message:
+                    "Conversation SMS supprimée avec succès."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[SMS DELETE CONVERSATION] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de la suppression de la conversation.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS — STATISTIQUES ADMIN
 ============================================================ */
 
 app.get(
@@ -6178,53 +6813,40 @@ app.get(
                         COUNT(*)::INTEGER
                             AS total,
 
-                        COUNT(*) FILTER
-                        (
-                            WHERE
-                                COALESCE(
-                                    is_read,
-                                    FALSE
-                                ) = FALSE
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(is_read, FALSE) = FALSE
                         )::INTEGER
                             AS unread,
 
-                        COUNT(*) FILTER
-                        (
-                            WHERE
-                                COALESCE(
-                                    is_read,
-                                    FALSE
-                                ) = TRUE
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(is_read, FALSE) = TRUE
                         )::INTEGER
                             AS read,
 
-                        COUNT(*) FILTER
-                        (
-                            WHERE
-                                audience = 'all'
+                        COUNT(*) FILTER (
+                            WHERE audience = 'all'
                         )::INTEGER
                             AS all_messages,
 
-                        COUNT(*) FILTER
-                        (
-                            WHERE
-                                audience = 'premium'
+                        COUNT(*) FILTER (
+                            WHERE audience = 'premium'
                         )::INTEGER
                             AS premium,
 
-                        COUNT(*) FILTER
-                        (
-                            WHERE
-                                audience = 'standard'
+                        COUNT(*) FILTER (
+                            WHERE audience = 'standard'
                         )::INTEGER
                             AS standard,
 
-                        COUNT(*) FILTER
-                        (
-                            WHERE
-                                audience = 'user'
+                        COUNT(*) FILTER (
+                            WHERE audience = 'user'
                         )::INTEGER
-                            AS individual
+                            AS individual,
+
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(is_archived, FALSE) = TRUE
+                        )::INTEGER
+                            AS archived
 
                     FROM sms_messages
                     `
@@ -6256,7 +6878,10 @@ app.get(
                     Number(row.standard) || 0,
 
                 individual:
-                    Number(row.individual) || 0
+                    Number(row.individual) || 0,
+
+                archived:
+                    Number(row.archived) || 0
             };
 
 
@@ -6283,7 +6908,7 @@ app.get(
                 success: false,
 
                 message:
-                    "Erreur statistiques SMS",
+                    "Erreur statistiques SMS.",
 
                 error:
                     error.message
@@ -6330,48 +6955,32 @@ app.get(
                 await pool.query(
                     `
                     SELECT
-
                         sms.id,
-
                         sms.sender_type,
-
                         sms.sender_id,
-
                         sms.recipient_user_id,
-
                         sms.subject,
-
                         sms.message,
-
                         sms.priority,
-
                         sms.audience,
-
                         sms.is_read,
-
                         sms.is_archived,
-
                         sms.parent_id,
-
                         sms.status,
-
                         sms.created_at,
-
                         sms.updated_at,
 
                         u.nom AS user_nom,
-
                         u.email AS user_email,
-
                         u.telephone AS user_telephone
 
                     FROM sms_messages sms
 
                     LEFT JOIN users u
-                        ON u.id =
-                           sms.recipient_user_id
+                        ON u.id = sms.recipient_user_id
 
                     ORDER BY
+                        sms.created_at DESC,
                         sms.id DESC
 
                     LIMIT $1
@@ -6404,7 +7013,7 @@ app.get(
                 success: false,
 
                 message:
-                    "Erreur récupération SMS récents",
+                    "Erreur récupération SMS récents.",
 
                 error:
                     error.message
@@ -6415,7 +7024,7 @@ app.get(
 
 
 /* ============================================================
-   SMS — DIAGNOSTIC
+   SMS — DIAGNOSTIC ADMIN
 ============================================================ */
 
 app.get(
@@ -6441,7 +7050,9 @@ app.get(
 
                 premiumResult,
 
-                standardResult
+                standardResult,
+
+                archivedResult
 
             ] =
                 await Promise.all([
@@ -6475,14 +7086,8 @@ app.get(
                         `
                         SELECT
                             COUNT(*)::INTEGER AS total
-
                         FROM sms_messages
-
-                        WHERE
-                            COALESCE(
-                                is_read,
-                                FALSE
-                            ) = FALSE
+                        WHERE COALESCE(is_read, FALSE) = FALSE
                         `
                     ),
 
@@ -6490,14 +7095,8 @@ app.get(
                         `
                         SELECT
                             COUNT(*)::INTEGER AS total
-
                         FROM sms_messages
-
-                        WHERE
-                            COALESCE(
-                                is_read,
-                                FALSE
-                            ) = TRUE
+                        WHERE COALESCE(is_read, FALSE) = TRUE
                         `
                     ),
 
@@ -6505,12 +7104,8 @@ app.get(
                         `
                         SELECT
                             COUNT(*)::INTEGER AS total
-
                         FROM sms_messages
-
-                        WHERE
-                            created_at::DATE =
-                            CURRENT_DATE
+                        WHERE created_at::DATE = CURRENT_DATE
                         `
                     ),
 
@@ -6518,11 +7113,8 @@ app.get(
                         `
                         SELECT
                             COUNT(*)::INTEGER AS total
-
                         FROM sms_messages
-
-                        WHERE
-                            audience = 'premium'
+                        WHERE audience = 'premium'
                         `
                     ),
 
@@ -6530,14 +7122,19 @@ app.get(
                         `
                         SELECT
                             COUNT(*)::INTEGER AS total
-
                         FROM sms_messages
+                        WHERE audience = 'standard'
+                        `
+                    ),
 
-                        WHERE
-                            audience = 'standard'
+                    pool.query(
+                        `
+                        SELECT
+                            COUNT(*)::INTEGER AS total
+                        FROM sms_messages
+                        WHERE COALESCE(is_archived, FALSE) = TRUE
                         `
                     )
-
                 ]);
 
 
@@ -6548,47 +7145,51 @@ app.get(
                 database: {
 
                     sms_table:
-                        tableResult.rows[0]
-                            .table_name !== null,
+                        tableResult.rows[0]?.table_name !== null,
 
                     users:
                         Number(
-                            usersResult.rows[0].total
+                            usersResult.rows[0]?.total
                         ) || 0,
 
                     sms:
                         Number(
-                            smsResult.rows[0].total
+                            smsResult.rows[0]?.total
                         ) || 0,
 
                     unread:
                         Number(
-                            unreadResult.rows[0].total
+                            unreadResult.rows[0]?.total
                         ) || 0,
 
                     read:
                         Number(
-                            readResult.rows[0].total
+                            readResult.rows[0]?.total
                         ) || 0,
 
                     today:
                         Number(
-                            todayResult.rows[0].total
+                            todayResult.rows[0]?.total
                         ) || 0,
 
                     premium:
                         Number(
-                            premiumResult.rows[0].total
+                            premiumResult.rows[0]?.total
                         ) || 0,
 
                     standard:
                         Number(
-                            standardResult.rows[0].total
+                            standardResult.rows[0]?.total
+                        ) || 0,
+
+                    archived:
+                        Number(
+                            archivedResult.rows[0]?.total
                         ) || 0
                 },
 
                 message:
-                    "Diagnostic SMS effectué"
+                    "Diagnostic SMS effectué."
             });
 
         } catch (error) {
@@ -6604,7 +7205,7 @@ app.get(
                 success: false,
 
                 message:
-                    "Erreur diagnostic SMS",
+                    "Erreur diagnostic SMS.",
 
                 error:
                     error.message
@@ -6612,6 +7213,1125 @@ app.get(
         }
     }
 );
+
+
+/* ============================================================
+   ============================================================
+   PARTIE UTILISATEUR
+   ============================================================
+============================================================ */
+
+
+/* ============================================================
+   SMS UTILISATEUR — PROFIL
+============================================================ */
+
+app.get(
+    "/api/user/sms/profile",
+    userSmsAuth,
+    async (req, res) => {
+
+        try {
+
+            return res.json({
+
+                success: true,
+
+                user: {
+
+                    id:
+                        req.smsUser.id,
+
+                    nom:
+                        req.smsUser.nom,
+
+                    email:
+                        req.smsUser.email,
+
+                    telephone:
+                        req.smsUser.telephone,
+
+                    photo:
+                        req.smsUser.photo,
+
+                    domaine:
+                        req.smsUser.domaine,
+
+                    pays:
+                        req.smsUser.pays,
+
+                    ville:
+                        req.smsUser.ville,
+
+                    niveau:
+                        req.smsUser.niveau,
+
+                    is_premium:
+                        req.smsUser.is_premium,
+
+                    progression:
+                        req.smsUser.progression
+                }
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[USER SMS PROFILE] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur récupération profil SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS UTILISATEUR — LISTE DES SMS
+============================================================ */
+
+app.get(
+    "/api/user/sms",
+    userSmsAuth,
+    async (req, res) => {
+
+        try {
+
+            const messagesResult =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        sender_type,
+                        sender_id,
+                        recipient_user_id,
+                        subject,
+                        message,
+                        priority,
+                        audience,
+                        is_read,
+                        is_archived,
+                        parent_id,
+                        status,
+                        created_at,
+                        updated_at
+                    FROM sms_messages
+                    WHERE
+                        recipient_user_id = $1
+                        AND COALESCE(is_archived, FALSE) = FALSE
+                    ORDER BY
+                        created_at ASC,
+                        id ASC
+                    `,
+                    [req.smsUserId]
+                );
+
+
+            const unreadResult =
+                await pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::INTEGER AS unread
+                    FROM sms_messages
+                    WHERE
+                        recipient_user_id = $1
+                        AND COALESCE(is_archived, FALSE) = FALSE
+                        AND COALESCE(is_read, FALSE) = FALSE
+                    `,
+                    [req.smsUserId]
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                user:
+                    req.smsUser,
+
+                count:
+                    messagesResult.rows.length,
+
+                unread:
+                    Number(
+                        unreadResult.rows[0]?.unread
+                    ) || 0,
+
+                messages:
+                    messagesResult.rows
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[USER SMS LIST] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur récupération de vos SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS UTILISATEUR — COMPTEUR NON LUS
+============================================================ */
+
+app.get(
+    "/api/user/sms/unread",
+    userSmsAuth,
+    async (req, res) => {
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::INTEGER AS unread
+                    FROM sms_messages
+                    WHERE
+                        recipient_user_id = $1
+                        AND COALESCE(is_archived, FALSE) = FALSE
+                        AND COALESCE(is_read, FALSE) = FALSE
+                    `,
+                    [req.smsUserId]
+                );
+
+
+            const unread =
+                Number(
+                    result.rows[0]?.unread
+                ) || 0;
+
+
+            return res.json({
+
+                success: true,
+
+                unread,
+
+                count:
+                    unread
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[USER SMS UNREAD] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur récupération compteur SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS UTILISATEUR — STATUT
+============================================================ */
+
+app.get(
+    "/api/user/sms/status",
+    userSmsAuth,
+    async (req, res) => {
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::INTEGER AS total,
+
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(is_read, FALSE) = FALSE
+                        )::INTEGER AS unread,
+
+                        COUNT(*) FILTER (
+                            WHERE COALESCE(is_read, FALSE) = TRUE
+                        )::INTEGER AS read
+
+                    FROM sms_messages
+
+                    WHERE
+                        recipient_user_id = $1
+                        AND COALESCE(is_archived, FALSE) = FALSE
+                    `,
+                    [req.smsUserId]
+                );
+
+
+            const row =
+                result.rows[0];
+
+
+            return res.json({
+
+                success: true,
+
+                total:
+                    Number(row.total) || 0,
+
+                unread:
+                    Number(row.unread) || 0,
+
+                read:
+                    Number(row.read) || 0
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[USER SMS STATUS] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur statut SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS UTILISATEUR — MARQUER UN SMS COMME LU
+============================================================ */
+
+app.patch(
+    "/api/user/sms/:smsId/read",
+    userSmsAuth,
+    async (req, res) => {
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide."
+                });
+            }
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sms_messages
+
+                    SET
+                        is_read = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
+
+                    WHERE
+                        id = $1
+                        AND recipient_user_id = $2
+
+                    RETURNING *
+                    `,
+                    [
+                        smsId,
+                        req.smsUserId
+                    ]
+                );
+
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable ou non autorisé."
+                });
+            }
+
+
+            return res.json({
+
+                success: true,
+
+                sms:
+                    result.rows[0],
+
+                message:
+                    "SMS marqué comme lu."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[USER SMS READ] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur marquage SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS UTILISATEUR — MARQUER TOUS COMME LUS
+============================================================ */
+
+app.patch(
+    "/api/user/sms/read-all",
+    userSmsAuth,
+    async (req, res) => {
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sms_messages
+
+                    SET
+                        is_read = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
+
+                    WHERE
+                        recipient_user_id = $1
+                        AND COALESCE(is_read, FALSE) = FALSE
+                        AND COALESCE(is_archived, FALSE) = FALSE
+
+                    RETURNING id
+                    `,
+                    [req.smsUserId]
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                count:
+                    result.rows.length,
+
+                message:
+                    "Tous vos SMS ont été marqués comme lus."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[USER SMS READ ALL] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors du marquage des SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS UTILISATEUR — RÉPONDRE À UN SMS
+============================================================ */
+
+app.post(
+    "/api/user/sms/:smsId/reply",
+    userSmsAuth,
+    async (req, res) => {
+
+        let client = null;
+        let transactionStarted = false;
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide."
+                });
+            }
+
+
+            const message =
+                normalizeSmsMessage(
+                    req.body?.message
+                );
+
+
+            if (!message) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Votre réponse est vide."
+                });
+            }
+
+
+            client =
+                await pool.connect();
+
+
+            const parentResult =
+                await client.query(
+                    `
+                    SELECT *
+                    FROM sms_messages
+                    WHERE
+                        id = $1
+                        AND recipient_user_id = $2
+                    LIMIT 1
+                    `,
+                    [
+                        smsId,
+                        req.smsUserId
+                    ]
+                );
+
+
+            if (
+                parentResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable ou non autorisé."
+                });
+            }
+
+
+            const parent =
+                parentResult.rows[0];
+
+
+            const subject =
+                normalizeSmsSubject(
+                    req.body?.subject ||
+                    `Re: ${parent.subject || "BMJ SERVICE"}`
+                );
+
+
+            const priority =
+                normalizeSmsPriority(
+                    req.body?.priority ||
+                    parent.priority ||
+                    "normal"
+                );
+
+
+            const rootParentId =
+                parent.parent_id
+                    ? Number(parent.parent_id)
+                    : Number(parent.id);
+
+
+            await client.query(
+                "BEGIN"
+            );
+
+            transactionStarted = true;
+
+
+            const replyResult =
+                await client.query(
+                    `
+                    INSERT INTO sms_messages
+                    (
+                        sender_type,
+                        sender_id,
+                        recipient_user_id,
+                        subject,
+                        message,
+                        priority,
+                        audience,
+                        is_read,
+                        is_archived,
+                        parent_id,
+                        status,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES
+                    (
+                        'user',
+                        $1,
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        'admin',
+                        TRUE,
+                        FALSE,
+                        $5,
+                        'sent',
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP
+                    )
+                    RETURNING *
+                    `,
+                    [
+                        req.smsUserId,
+                        subject,
+                        message,
+                        priority,
+                        rootParentId
+                    ]
+                );
+
+
+            const reply =
+                replyResult.rows[0];
+
+
+            await createSmsUserActivity(
+                client,
+                req.smsUserId,
+                "SMS_UTILISATEUR_REPONSE",
+                `Réponse envoyée : ${subject}`
+            );
+
+
+            await client.query(
+                `
+                UPDATE sms_messages
+
+                SET
+                    is_read = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
+
+                WHERE
+                    id = $1
+                    AND recipient_user_id = $2
+                `,
+                [
+                    smsId,
+                    req.smsUserId
+                ]
+            );
+
+
+            await client.query(
+                "COMMIT"
+            );
+
+            transactionStarted = false;
+
+
+            await safeLogAdminAction(
+                "SMS_REPONSE_UTILISATEUR",
+                `Utilisateur ${req.smsUserId} a répondu au SMS #${smsId}.`
+            );
+
+
+            return res.status(201).json({
+
+                success: true,
+
+                sms:
+                    reply,
+
+                message:
+                    "Votre réponse a été envoyée."
+            });
+
+        } catch (error) {
+
+            if (
+                client &&
+                transactionStarted
+            ) {
+
+                try {
+
+                    await client.query(
+                        "ROLLBACK"
+                    );
+
+                } catch (rollbackError) {
+
+                    console.error(
+                        "[USER SMS REPLY] ROLLBACK :",
+                        rollbackError.message
+                    );
+                }
+            }
+
+
+            console.error(
+                "[USER SMS REPLY] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur lors de l'envoi de votre réponse.",
+
+                error:
+                    error.message,
+
+                code:
+                    error.code || null
+            });
+
+        } finally {
+
+            if (client) {
+
+                client.release();
+            }
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS UTILISATEUR — CONVERSATION
+============================================================ */
+
+app.get(
+    "/api/user/sms/:smsId/conversation",
+    userSmsAuth,
+    async (req, res) => {
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide."
+                });
+            }
+
+
+            const parentResult =
+                await pool.query(
+                    `
+                    SELECT *
+                    FROM sms_messages
+                    WHERE
+                        id = $1
+                        AND recipient_user_id = $2
+                    LIMIT 1
+                    `,
+                    [
+                        smsId,
+                        req.smsUserId
+                    ]
+                );
+
+
+            if (
+                parentResult.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable ou non autorisé."
+                });
+            }
+
+
+            const parent =
+                parentResult.rows[0];
+
+
+            const rootId =
+                parent.parent_id
+                    ? Number(parent.parent_id)
+                    : Number(parent.id);
+
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+                        id,
+                        sender_type,
+                        sender_id,
+                        recipient_user_id,
+                        subject,
+                        message,
+                        priority,
+                        audience,
+                        is_read,
+                        is_archived,
+                        parent_id,
+                        status,
+                        created_at,
+                        updated_at
+                    FROM sms_messages
+                    WHERE
+                        recipient_user_id = $1
+                        AND (
+                            id = $2
+                            OR parent_id = $2
+                        )
+                    ORDER BY
+                        created_at ASC,
+                        id ASC
+                    `,
+                    [
+                        req.smsUserId,
+                        rootId
+                    ]
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                root_id:
+                    rootId,
+
+                count:
+                    result.rows.length,
+
+                messages:
+                    result.rows
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[USER SMS CONVERSATION] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur récupération conversation.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS UTILISATEUR — ARCHIVER SON SMS
+============================================================ */
+
+app.patch(
+    "/api/user/sms/:smsId/archive",
+    userSmsAuth,
+    async (req, res) => {
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide."
+                });
+            }
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sms_messages
+
+                    SET
+                        is_archived = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
+
+                    WHERE
+                        id = $1
+                        AND recipient_user_id = $2
+
+                    RETURNING *
+                    `,
+                    [
+                        smsId,
+                        req.smsUserId
+                    ]
+                );
+
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable ou non autorisé."
+                });
+            }
+
+
+            return res.json({
+
+                success: true,
+
+                sms:
+                    result.rows[0],
+
+                message:
+                    "SMS archivé."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[USER SMS ARCHIVE] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur archivage SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   SMS UTILISATEUR — RESTAURER SON SMS
+============================================================ */
+
+app.patch(
+    "/api/user/sms/:smsId/unarchive",
+    userSmsAuth,
+    async (req, res) => {
+
+        try {
+
+            const smsId =
+                Number(
+                    req.params.smsId
+                );
+
+
+            if (
+                !Number.isInteger(smsId) ||
+                smsId <= 0
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    message:
+                        "Identifiant SMS invalide."
+                });
+            }
+
+
+            const result =
+                await pool.query(
+                    `
+                    UPDATE sms_messages
+
+                    SET
+                        is_archived = FALSE,
+                        updated_at = CURRENT_TIMESTAMP
+
+                    WHERE
+                        id = $1
+                        AND recipient_user_id = $2
+
+                    RETURNING *
+                    `,
+                    [
+                        smsId,
+                        req.smsUserId
+                    ]
+                );
+
+
+            if (
+                result.rows.length === 0
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    message:
+                        "SMS introuvable ou non autorisé."
+                });
+            }
+
+
+            return res.json({
+
+                success: true,
+
+                sms:
+                    result.rows[0],
+
+                message:
+                    "SMS restauré."
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[USER SMS UNARCHIVE] ERREUR :",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                message:
+                    "Erreur restauration SMS.",
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+
+/* ============================================================
+   FIN DU NOUVEAU SYSTÈME SMS
+============================================================ */
 /* ============================================================
    MESSAGES — ENVOI AUX STANDARD
 ============================================================ */
