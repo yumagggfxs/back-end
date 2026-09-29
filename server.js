@@ -1938,61 +1938,66 @@ async function ensureCelestineCompleted() {
 }
 
 /* ============================================================
-   CONFIGURATION PROGRESSIONS AUTOMATIQUES
+   PROGRESSION AUTOMATIQUE — PREMIUM UNIQUEMENT
+   ============================================================
+
+   RÈGLES :
+
+   1. UTILISATEUR STANDARD
+      → aucune progression automatique
+      → sa progression reste inchangée
+
+   2. UTILISATEUR PREMIUM
+      → progression automatique toutes les 24 heures
+      → ajout aléatoire de +1 à +5 %
+      → arrêt automatique à 100 %
+
+   3. ADMIN
+      → peut toujours modifier manuellement
+        la progression avec la route PATCH prévue plus bas.
+
+   IMPORTANT :
+   → La progression automatique ne dépend PAS de la connexion
+     de l'utilisateur.
+   → Elle fonctionne côté serveur.
+   → Elle fonctionne uniquement pour is_premium = true.
+============================================================ */
+
+
+/* ============================================================
+   CONFIGURATION
 ============================================================ */
 
 /*
- * Progression spéciale.
- * Cet utilisateur reste toujours à 100 %.
+ * Minimum ajouté à chaque progression automatique.
  */
-/*
- * Nombre minimum de points ajoutés
- * après chaque période de 24 heures.
- */
-
-const PROGRESSION_MIN =
-    1;
+const PROGRESSION_MIN = 1;
 
 
 /*
- * Nombre maximum de points ajoutés
- * après chaque période de 24 heures.
+ * Maximum ajouté à chaque progression automatique.
  */
-
-const PROGRESSION_MAX =
-    5;
+const PROGRESSION_MAX = 5;
 
 
 /*
- * Durée entre deux progressions automatiques.
+ * Délai entre deux progressions automatiques.
  *
- * 24 heures = 24 × 60 × 60 × 1000
+ * 24 heures =
+ * 24 × 60 × 60 × 1000 millisecondes
  */
-
 const DELAI_PROGRESSION_24H =
     24 * 60 * 60 * 1000;
 
 
 /* ============================================================
-   OUTILS PROGRESSION
+   OUTIL : NORMALISER UNE PROGRESSION
 ============================================================ */
-
-/*
- * Normalise une progression.
- *
- * Exemple :
- *
- * null     → 0
- * "50"     → 50
- * 120      → 100
- * -10      → 0
- */
 
 function normalizeProgression(value) {
 
     const nombre =
         Number(value);
-
 
     if (
         !Number.isFinite(nombre)
@@ -2000,7 +2005,6 @@ function normalizeProgression(value) {
 
         return 0;
     }
-
 
     return Math.max(
         0,
@@ -2012,17 +2016,9 @@ function normalizeProgression(value) {
 }
 
 
-/*
- * Génère un petit ajout aléatoire.
- *
- * Résultat :
- *
- * 1
- * 2
- * 3
- * 4
- * ou 5
- */
+/* ============================================================
+   OUTIL : GÉNÉRER UNE AUGMENTATION ALÉATOIRE
+============================================================ */
 
 function progressionAleatoire() {
 
@@ -2037,107 +2033,69 @@ function progressionAleatoire() {
 }
 
 
-/*
- * Vérifie si un email correspond
- * à l'utilisateur qui doit rester à 100 %.
- */
+/* ============================================================
+   VÉRIFIER SI L'UTILISATEUR EST PREMIUM
+============================================================ */
 
-function isCelestine(email) {
+function isPremiumUser(user) {
+
+    /*
+     * PostgreSQL peut retourner :
+     *
+     * true
+     * false
+     *
+     * Mais cette fonction accepte également
+     * "true" / "1" au cas où les données
+     * viendraient d'une autre source.
+     */
 
     return (
-        String(email || "")
-            .trim()
-            .toLowerCase()
-        ===
-        EMAIL_UTILISATEUR_100
-            .trim()
-            .toLowerCase()
+        user &&
+        (
+            user.is_premium === true ||
+            user.is_premium === "true" ||
+            user.is_premium === 1 ||
+            user.is_premium === "1"
+        )
     );
 }
 
 
 /* ============================================================
-   GARANTIR CELESTINE À 100 %
-============================================================ */
-
-async function ensureCelestineCompleted() {
-
-    try {
-
-        await pool.query(
-            `
-            UPDATE users
-
-            SET
-                progression = 100,
-                updated_at = CURRENT_TIMESTAMP
-
-            WHERE
-                LOWER(TRIM(email))
-                =
-                LOWER(TRIM($1))
-
-            AND
-                COALESCE(
-                    progression,
-                    0
-                ) < 100
-            `,
-            [
-                EMAIL_UTILISATEUR_100
-            ]
-        );
-
-
-    } catch (error) {
-
-        console.error(
-            "[CELESTINE 100%] ERREUR :",
-            error.message
-        );
-    }
-}
-
-
-/* ============================================================
-   INITIALISATION DES PROGRESSIONS
+   INITIALISATION DES PROGRESSIONS PREMIUM
 ============================================================ */
 
 /*
- * Cette fonction initialise uniquement les utilisateurs
+ * Cette fonction initialise UNIQUEMENT les utilisateurs PREMIUM
  * qui n'ont pas encore de progression.
  *
- * IMPORTANT :
+ * UTILISATEUR STANDARD :
+ * → ignoré complètement.
  *
- * Un utilisateur qui possède déjà une progression
- * n'est PAS modifié.
+ * UTILISATEUR PREMIUM :
+ * → reçoit une progression initiale aléatoire entre 1 et 5 %
+ *   uniquement si sa progression est NULL ou 0.
  *
- * Exemple :
- *
- * 35 % reste 35 %
- * 62 % reste 62 %
- * 91 % reste 91 %
+ * Une progression existante n'est jamais remplacée.
  */
 
-async function initializeUserProgressions() {
+async function initializePremiumProgressions() {
 
     try {
 
         console.log(
-            "[PROGRESSION INIT] Initialisation..."
+            "[PROGRESSION PREMIUM] Initialisation..."
         );
 
 
         /*
-         * Garantit que Celestine est à 100 %.
-         */
-
-        await ensureCelestineCompleted();
-
-
-        /*
-         * On cherche uniquement les utilisateurs
-         * dont la progression est inexistante ou à 0.
+         * IMPORTANT :
+         *
+         * is_premium = TRUE
+         *
+         * garantit que les utilisateurs standards
+         * ne sont jamais concernés.
          */
 
         const result =
@@ -2146,36 +2104,32 @@ async function initializeUserProgressions() {
                 SELECT
                     id,
                     email,
-                    progression
+                    progression,
+                    is_premium,
+                    updated_at
 
                 FROM users
 
                 WHERE
+                    COALESCE(is_premium, false) = true
+
+                AND
                     (
                         progression IS NULL
                         OR
                         progression <= 0
                     )
 
-                AND
-                    LOWER(TRIM(email))
-                    <>
-                    LOWER(TRIM($1))
-
                 ORDER BY id ASC
-                `,
-                [
-                    EMAIL_UTILISATEUR_100
-                ]
+                `
             );
 
 
-        let nombreInitialise =
-            0;
+        let nombreInitialise = 0;
 
 
         /*
-         * Initialisation utilisateur par utilisateur.
+         * Traiter chaque utilisateur séparément.
          */
 
         for (
@@ -2184,15 +2138,39 @@ async function initializeUserProgressions() {
         ) {
 
             /*
-             * Petite progression initiale.
+             * Double sécurité :
              *
-             * Elle ne concerne que les utilisateurs
-             * qui n'avaient aucune progression.
+             * même si une donnée inattendue
+             * arrive dans result.rows,
+             * on vérifie encore le statut Premium.
+             */
+
+            if (
+                !isPremiumUser(user)
+            ) {
+
+                console.log(
+                    `[PROGRESSION PREMIUM] ${user.email} ignoré : utilisateur standard.`
+                );
+
+                continue;
+            }
+
+
+            /*
+             * Générer une petite progression initiale.
              */
 
             const nouvelleProgression =
                 progressionAleatoire();
 
+
+            /*
+             * Mise à jour uniquement si :
+             *
+             * - l'utilisateur est Premium
+             * - progression NULL ou <= 0
+             */
 
             const updateResult =
                 await pool.query(
@@ -2207,26 +2185,24 @@ async function initializeUserProgressions() {
                         id = $2
 
                     AND
+                        COALESCE(is_premium, false) = true
+
+                    AND
                         (
                             progression IS NULL
                             OR
                             progression <= 0
                         )
 
-                    AND
-                        LOWER(TRIM(email))
-                        <>
-                        LOWER(TRIM($3))
-
                     RETURNING
                         id,
                         email,
-                        progression
+                        progression,
+                        is_premium
                     `,
                     [
                         nouvelleProgression,
-                        user.id,
-                        EMAIL_UTILISATEUR_100
+                        user.id
                     ]
                 );
 
@@ -2239,28 +2215,21 @@ async function initializeUserProgressions() {
 
 
                 console.log(
-                    `[PROGRESSION INIT] ${user.email} → ${nouvelleProgression}%`
+                    `[PROGRESSION PREMIUM] ${user.email} → ${nouvelleProgression}%`
                 );
             }
         }
 
 
-        /*
-         * Vérification finale.
-         */
-
-        await ensureCelestineCompleted();
-
-
         console.log(
-            `[PROGRESSION INIT] ${nombreInitialise} utilisateur(s) initialisé(s).`
+            `[PROGRESSION PREMIUM] ${nombreInitialise} utilisateur(s) Premium initialisé(s).`
         );
 
 
     } catch (error) {
 
         console.error(
-            "[PROGRESSION INIT] ERREUR :",
+            "[PROGRESSION PREMIUM] ERREUR INITIALISATION :",
             error.message
         );
     }
@@ -2268,44 +2237,42 @@ async function initializeUserProgressions() {
 
 
 /* ============================================================
-   MISE À JOUR AUTOMATIQUE DES PROGRESSIONS
+   MISE À JOUR AUTOMATIQUE — PREMIUM UNIQUEMENT
 ============================================================ */
 
 /*
- * Cette fonction ajoute +1 à +5 %
- * à la progression ACTUELLE.
+ * Cette fonction est le cœur du système.
  *
- * Elle ne remplace jamais la progression
- * par une nouvelle valeur aléatoire.
+ * ELLE NE MODIFIE QUE LES PREMIUM.
  *
- * Exemple :
+ * STANDARD :
+ * → aucune requête UPDATE
  *
- * 40 % → 43 %
- * 55 % → 56 %
- * 72 % → 77 %
- *
- * uniquement après 24 heures.
+ * PREMIUM :
+ * → vérification des 24 heures
+ * → +1 à +5 %
+ * → maximum 100 %
  */
 
-async function updateRandomProgressions() {
+async function updatePremiumProgressions() {
 
     try {
 
         console.log(
-            "[PROGRESSION AUTO] Vérification..."
+            "[PROGRESSION PREMIUM] Vérification automatique..."
         );
 
 
         /*
-         * Garantit que Celestine reste à 100 %.
-         */
-
-        await ensureCelestineCompleted();
-
-
-        /*
-         * Récupère les utilisateurs
-         * qui ne sont pas encore terminés.
+         * Récupérer UNIQUEMENT les utilisateurs Premium
+         * dont la progression est inférieure à 100 %.
+         *
+         * IMPORTANT :
+         *
+         * COALESCE(is_premium, false) = true
+         *
+         * empêche les comptes standards
+         * d'entrer dans le système automatique.
          */
 
         const result =
@@ -2315,41 +2282,52 @@ async function updateRandomProgressions() {
                     id,
                     email,
                     progression,
+                    is_premium,
                     updated_at
 
                 FROM users
 
                 WHERE
-                    COALESCE(
-                        progression,
-                        0
-                    ) < 100
+                    COALESCE(is_premium, false) = true
 
                 AND
-                    LOWER(TRIM(email))
-                    <>
-                    LOWER(TRIM($1))
+                    COALESCE(progression, 0) < 100
 
                 ORDER BY id ASC
-                `,
-                [
-                    EMAIL_UTILISATEUR_100
-                ]
+                `
             );
 
 
-        let nombreModifie =
-            0;
+        let nombreModifie = 0;
 
 
         /*
-         * Traitement de chaque utilisateur.
+         * Traiter chaque Premium séparément.
          */
 
         for (
             const user
             of result.rows
         ) {
+
+            /*
+             * DOUBLE SÉCURITÉ
+             *
+             * On refuse toute modification si
+             * l'utilisateur n'est pas Premium.
+             */
+
+            if (
+                !isPremiumUser(user)
+            ) {
+
+                console.log(
+                    `[PROGRESSION PREMIUM] ${user.email} ignoré : compte standard.`
+                );
+
+                continue;
+            }
+
 
             /*
              * Progression actuelle.
@@ -2362,25 +2340,25 @@ async function updateRandomProgressions() {
 
 
             /*
-             * Sécurité :
-             * une progression de 100 %
-             * ne doit jamais être modifiée.
+             * Si la progression est déjà à 100 %,
+             * aucune modification.
              */
 
             if (
                 ancienneProgression >= 100
             ) {
 
+                console.log(
+                    `[PROGRESSION PREMIUM] ${user.email} est déjà à 100 %.`
+                );
+
                 continue;
             }
 
 
-            /*
-             * Vérification des 24 heures.
-             *
-             * updated_at correspond ici à la dernière
-             * modification automatique de progression.
-             */
+            /* ====================================================
+               VÉRIFICATION DES 24 HEURES
+            ==================================================== */
 
             if (
                 user.updated_at
@@ -2403,7 +2381,7 @@ async function updateRandomProgressions() {
 
                 /*
                  * Moins de 24 heures :
-                 * aucune modification.
+                 * on ne fait absolument rien.
                  */
 
                 if (
@@ -2412,7 +2390,7 @@ async function updateRandomProgressions() {
                 ) {
 
                     console.log(
-                        `[PROGRESSION AUTO] ${user.email} : prochaine progression après 24h.`
+                        `[PROGRESSION PREMIUM] ${user.email} : attente des 24 heures.`
                     );
 
                     continue;
@@ -2420,20 +2398,22 @@ async function updateRandomProgressions() {
             }
 
 
-            /*
-             * Ajout aléatoire de +1 à +5.
-             */
+            /* ====================================================
+               CALCUL DE L'AUGMENTATION
+            ==================================================== */
 
             const ajout =
                 progressionAleatoire();
 
 
             /*
-             * On ajoute au niveau ACTUEL.
+             * Ajouter l'augmentation à la progression actuelle.
              *
              * Exemple :
              *
              * 45 + 3 = 48
+             *
+             * 98 + 5 = 100
              */
 
             const nouvelleProgression =
@@ -2443,9 +2423,9 @@ async function updateRandomProgressions() {
                 );
 
 
-            /*
-             * Mise à jour sécurisée.
-             */
+            /* ====================================================
+               MISE À JOUR SQL
+            ==================================================== */
 
             const updateResult =
                 await pool.query(
@@ -2460,31 +2440,26 @@ async function updateRandomProgressions() {
                         id = $2
 
                     AND
-                        COALESCE(
-                            progression,
-                            0
-                        ) < 100
+                        COALESCE(is_premium, false) = true
 
                     AND
-                        LOWER(TRIM(email))
-                        <>
-                        LOWER(TRIM($3))
+                        COALESCE(progression, 0) < 100
 
                     RETURNING
                         id,
                         email,
-                        progression
+                        progression,
+                        is_premium
                     `,
                     [
                         nouvelleProgression,
-                        user.id,
-                        EMAIL_UTILISATEUR_100
+                        user.id
                     ]
                 );
 
 
             /*
-             * Vérifie si la mise à jour
+             * Vérifier que la modification
              * a réellement été effectuée.
              */
 
@@ -2504,13 +2479,12 @@ async function updateRandomProgressions() {
 
 
                 console.log(
-                    `[PROGRESSION AUTO] ${user.email} : ${ancienneProgression}% + ${ajout}% = ${progressionFinale}%`
+                    `[PROGRESSION PREMIUM] ${user.email} : ${ancienneProgression}% + ${ajout}% = ${progressionFinale}%`
                 );
 
 
                 /*
-                 * Lorsque l'utilisateur atteint 100 %,
-                 * on l'indique dans les logs.
+                 * Si le Premium atteint 100 %.
                  */
 
                 if (
@@ -2518,30 +2492,22 @@ async function updateRandomProgressions() {
                 ) {
 
                     console.log(
-                        `[PROGRESSION AUTO] ${user.email} est maintenant TERMINÉ.`
+                        `[PROGRESSION PREMIUM] ${user.email} est maintenant TERMINÉ.`
                     );
                 }
             }
         }
 
 
-        /*
-         * Sécurité finale :
-         * Celestine reste toujours à 100 %.
-         */
-
-        await ensureCelestineCompleted();
-
-
         console.log(
-            `[PROGRESSION AUTO] ${nombreModifie} utilisateur(s) mis à jour.`
+            `[PROGRESSION PREMIUM] ${nombreModifie} utilisateur(s) Premium mis à jour.`
         );
 
 
     } catch (error) {
 
         console.error(
-            "[PROGRESSION AUTO] ERREUR :",
+            "[PROGRESSION PREMIUM] ERREUR :",
             error.message
         );
     }
@@ -2549,11 +2515,14 @@ async function updateRandomProgressions() {
 
 
 /* ============================================================
-   DÉMARRAGE AUTOMATIQUE DU SYSTÈME
+   DÉMARRAGE AUTOMATIQUE
 ============================================================ */
 
 /*
- * Initialisation au démarrage du serveur.
+ * Le serveur démarre le système après 5 secondes.
+ *
+ * IMPORTANT :
+ * Cela ne modifie que les utilisateurs Premium.
  */
 
 setTimeout(
@@ -2561,14 +2530,26 @@ setTimeout(
 
         try {
 
-            await initializeUserProgressions();
+            /*
+             * Initialiser uniquement les Premium
+             * qui n'ont pas encore de progression.
+             */
 
-            await updateRandomProgressions();
+            await initializePremiumProgressions();
+
+
+            /*
+             * Vérifier immédiatement les Premium
+             * qui peuvent déjà recevoir leur progression.
+             */
+
+            await updatePremiumProgressions();
+
 
         } catch (error) {
 
             console.error(
-                "[PROGRESSION AUTO] ERREUR DÉMARRAGE :",
+                "[PROGRESSION PREMIUM] ERREUR DÉMARRAGE :",
                 error.message
             );
         }
@@ -2578,15 +2559,24 @@ setTimeout(
 );
 
 
+/* ============================================================
+   VÉRIFICATION AUTOMATIQUE TOUTES LES HEURES
+============================================================ */
+
 /*
  * Le serveur vérifie toutes les heures.
  *
- * IMPORTANT :
+ * MAIS :
  *
- * Cela ne veut PAS dire que la progression augmente
+ * Cela ne signifie PAS que la progression augmente
  * toutes les heures.
  *
- * La fonction vérifie d'abord que 24 heures sont écoulées.
+ * La fonction vérifie toujours que 24 heures
+ * sont réellement écoulées depuis updated_at.
+ *
+ * ET surtout :
+ *
+ * seuls les Premium sont concernés.
  */
 
 setInterval(
@@ -2594,506 +2584,18 @@ setInterval(
 
         try {
 
-            await updateRandomProgressions();
+            await updatePremiumProgressions();
 
         } catch (error) {
 
             console.error(
-                "[PROGRESSION AUTO] ERREUR INTERVALLE :",
+                "[PROGRESSION PREMIUM] ERREUR INTERVALLE :",
                 error.message
             );
         }
 
     },
     60 * 60 * 1000
-);
-
-
-/* ============================================================
-   MODIFICATION MANUELLE PROGRESSION
-============================================================ */
-
-app.patch(
-    "/api/admin/users/:id/progression",
-    adminAuth,
-    async (req, res) => {
-
-        try {
-
-            const id =
-                Number(req.params.id);
-
-
-            if (
-                !Number.isInteger(id) ||
-                id <= 0
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Identifiant utilisateur invalide"
-                });
-            }
-
-
-            const existingUser =
-                await pool.query(
-                    `
-                    SELECT
-                        id,
-                        email,
-                        progression
-
-                    FROM users
-
-                    WHERE id = $1
-                    `,
-                    [id]
-                );
-
-
-            if (
-                existingUser.rows.length === 0
-            ) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Utilisateur introuvable"
-                });
-            }
-
-
-            const user =
-                existingUser.rows[0];
-
-
-            const ancienneProgression =
-                normalizeProgression(
-                    user.progression
-                );
-
-
-            let progression =
-                normalizeProgression(
-                    req.body?.progression
-                );
-
-
-            /*
-             * Une progression terminée ne peut pas
-             * être redescendue manuellement.
-             */
-
-            if (
-                ancienneProgression >= 100
-            ) {
-
-                progression = 100;
-            }
-
-
-            /*
-             * Celestine reste toujours à 100 %.
-             */
-
-            if (
-                isCelestine(
-                    user.email
-                )
-            ) {
-
-                progression = 100;
-            }
-
-
-            const result =
-                await pool.query(
-                    `
-                    UPDATE users
-
-                    SET
-                        progression = $1,
-                        updated_at = CURRENT_TIMESTAMP
-
-                    WHERE
-                        id = $2
-
-                    RETURNING
-                        id,
-                        email,
-                        progression
-                    `,
-                    [
-                        progression,
-                        id
-                    ]
-                );
-
-
-            await safeLogAdminAction(
-                "MODIFICATION_PROGRESSION",
-                `Utilisateur ${id} : ${progression}%`
-            );
-
-
-            return res.json({
-
-                success: true,
-
-                user: {
-
-                    id:
-                        result.rows[0].id,
-
-                    email:
-                        result.rows[0].email,
-
-                    progression:
-                        result.rows[0].progression,
-
-                    statut:
-                        progression >= 100
-                            ? "Terminé"
-                            : "En cours"
-                },
-
-                message:
-                    "Progression globale mise à jour"
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                "[PROGRESSION GLOBALE]",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Erreur progression",
-
-                error:
-                    error.message
-            });
-        }
-    }
-);
-
-
-/* ============================================================
-   PROGRESSION PAR DOMAINE
-============================================================ */
-
-app.patch(
-    "/api/admin/users/:id/progression/domaine",
-    adminAuth,
-    async (req, res) => {
-
-        try {
-
-            const userId =
-                Number(req.params.id);
-
-
-            const domaine =
-                clean(
-                    req.body?.domaine
-                );
-
-
-            let progression =
-                normalizeProgression(
-                    req.body?.progression
-                );
-
-
-            const chapitreActuel =
-                Math.max(
-                    0,
-                    Math.round(
-                        safeNumber(
-                            req.body?.chapitre_actuel,
-                            0
-                        )
-                    )
-                );
-
-
-            const chapitreTotal =
-                Math.max(
-                    0,
-                    Math.round(
-                        safeNumber(
-                            req.body?.chapitre_total,
-                            0
-                        )
-                    )
-                );
-
-
-            if (
-                !Number.isInteger(userId) ||
-                userId <= 0 ||
-                !domaine
-            ) {
-
-                return res.status(400).json({
-
-                    success: false,
-
-                    message:
-                        "Données de progression invalides"
-                });
-            }
-
-
-            const userResult =
-                await pool.query(
-                    `
-                    SELECT
-                        id,
-                        email,
-                        progression
-
-                    FROM users
-
-                    WHERE id = $1
-                    `,
-                    [userId]
-                );
-
-
-            if (
-                userResult.rows.length === 0
-            ) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    message:
-                        "Utilisateur introuvable"
-                });
-            }
-
-
-            const user =
-                userResult.rows[0];
-
-
-            /*
-             * Celestine :
-             * progression du domaine toujours à 100 %.
-             */
-
-            if (
-                isCelestine(
-                    user.email
-                )
-            ) {
-
-                progression = 100;
-            }
-
-
-            /*
-             * Si la progression globale est terminée,
-             * le domaine ne peut pas redescendre.
-             */
-
-            if (
-                normalizeProgression(
-                    user.progression
-                ) >= 100
-            ) {
-
-                progression = 100;
-            }
-
-
-            /*
-             * Recherche du domaine existant.
-             */
-
-            const existing =
-                await pool.query(
-                    `
-                    SELECT
-                        id,
-                        progression
-
-                    FROM user_progress
-
-                    WHERE
-                        user_id = $1
-
-                    AND
-                        domaine = $2
-
-                    LIMIT 1
-                    `,
-                    [
-                        userId,
-                        domaine
-                    ]
-                );
-
-
-            let statut =
-                progression >= 100
-                    ? "Terminé"
-                    : "En cours";
-
-
-            /*
-             * Le domaine existe déjà.
-             */
-
-            if (
-                existing.rows.length > 0
-            ) {
-
-                /*
-                 * Un domaine déjà terminé
-                 * reste terminé.
-                 */
-
-                if (
-                    normalizeProgression(
-                        existing.rows[0].progression
-                    ) >= 100
-                ) {
-
-                    progression = 100;
-
-                    statut =
-                        "Terminé";
-                }
-
-
-                await pool.query(
-                    `
-                    UPDATE user_progress
-
-                    SET
-                        progression = $1,
-                        chapitre_actuel = $2,
-                        chapitre_total = $3,
-                        statut = $4,
-                        updated_at = CURRENT_TIMESTAMP
-
-                    WHERE
-                        id = $5
-                    `,
-                    [
-                        progression,
-                        chapitreActuel,
-                        chapitreTotal,
-                        statut,
-                        existing.rows[0].id
-                    ]
-                );
-
-
-            } else {
-
-                /*
-                 * Nouveau domaine.
-                 */
-
-                await pool.query(
-                    `
-                    INSERT INTO user_progress
-                    (
-                        user_id,
-                        domaine,
-                        progression,
-                        chapitre_actuel,
-                        chapitre_total,
-                        statut,
-                        updated_at
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4,
-                        $5,
-                        $6,
-                        CURRENT_TIMESTAMP
-                    )
-                    `,
-                    [
-                        userId,
-                        domaine,
-                        progression,
-                        chapitreActuel,
-                        chapitreTotal,
-                        statut
-                    ]
-                );
-            }
-
-
-            await safeLogAdminAction(
-                "MODIFICATION_PROGRESSION_DOMAINE",
-                `Utilisateur ${userId}, domaine ${domaine} : ${progression}%`
-            );
-
-
-            return res.json({
-
-                success: true,
-
-                user_id:
-                    userId,
-
-                domaine,
-
-                progression,
-
-                statut:
-                    progression >= 100
-                        ? "Terminé"
-                        : "En cours",
-
-                message:
-                    "Progression du domaine mise à jour"
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                "[PROGRESSION DOMAINE]",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                message:
-                    "Erreur progression domaine",
-
-                error:
-                    error.message
-            });
-        }
-    }
 );
 /* ============================================================
    STATISTIQUES ADMIN
