@@ -1,126 +1,62 @@
 "use strict";
 
 /* ============================================================
-   BMJ SERVICE — BACKEND
-   Node.js + Express + PostgreSQL
-
-   VERSION ORGANISÉE ET CORRIGÉE
-
-   IMPORTANT :
-   ------------------------------------------------------------
-   - Aucune suppression automatique de données
-   - Aucun DROP
-   - Aucun TRUNCATE
-   - Aucun DELETE automatique
-   - Messages existants conservés
-   - Ancienne table "messages" conservée
-   - Nouvelle table "sms_messages" indépendante
-   - Notifications conservées
-   - Progression aléatoire toutes les 24 heures
-   - 100 % permanent
-   - celestine@gmail.com = 100 %
-   - Nouveau système SMS indépendant
-============================================================ */
-
+   BMJ SERVICE
+   BACKEND NODE.JS / EXPRESS / POSTGRESQL
+   VERSION CORRIGÉE
+   ============================================================ */
 
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
 const { Pool } = require("pg");
 
-const app = express();
-
 
 /* ============================================================
    CONFIGURATION
 ============================================================ */
 
-const PORT =
-    Number(process.env.PORT) || 10000;
+const app = express();
 
-
-/*
- * DATABASE_URL DOIT ÊTRE CONFIGURÉE DANS RENDER.
- *
- * Exemple de variable Render :
- *
- * DATABASE_URL=postgresql://...
- *
- * Ne pas mettre le mot de passe PostgreSQL
- * directement dans GitHub.
- */
+const PORT = Number(process.env.PORT) || 10000;
 
 const DATABASE_URL =
-    process.env.DATABASE_URL || "postgresql://name_bmj_db_user:TjgoLRbYV0LizRgBFD1nepGqSqErgBgD@dpg-dagn0e15efls73b8rjh0-a/name_bmj_db";
-
+    String(process.env.DATABASE_URL || "postgresql://bmj_itv9_user:TVbRRuZIUlXNE6ek4hoLH3nDivmIlgJI@dpg-davnrlid0e5s738ne660-a.oregon-postgres.render.com/bmj_itv9").trim();
 
 const ADMIN_EMAIL =
-    process.env.ADMIN_EMAIL ||
-    "admin@bmjservice.com";
-
+    String(
+        process.env.ADMIN_EMAIL ||
+        "admin@bmjservice.com"
+    ).trim();
 
 const ADMIN_PASSWORD =
-    process.env.ADMIN_PASSWORD ||
-    "admin123";
-
-
-/* ============================================================
-   PROGRESSION
-============================================================ */
+    String(
+        process.env.ADMIN_PASSWORD ||
+        "admin123"
+    );
 
 const EMAIL_UTILISATEUR_100 =
     "celestine@gmail.com";
 
 
+/* ============================================================
+   PROGRESSION AUTOMATIQUE
+============================================================ */
+
 const PROGRESSION_INTERVALLE =
     24 * 60 * 60 * 1000;
 
+const PROGRESSION_MIN = 1;
+const PROGRESSION_MAX = 5;
+
 
 /* ============================================================
-   POSTGRESQL
+   VARIABLES GLOBALES
 ============================================================ */
 
-if (!DATABASE_URL) {
+const adminTokens = new Map();
 
-    console.warn(
-        "[DATABASE] ATTENTION : DATABASE_URL n'est pas configurée."
-    );
-}
-
-
-const pool =
-    new Pool({
-
-        connectionString:
-            DATABASE_URL || undefined,
-
-        ssl:
-            DATABASE_URL
-                ? {
-                    rejectUnauthorized: false
-                }
-                : false,
-
-        max: 10,
-
-        idleTimeoutMillis:
-            30000,
-
-        connectionTimeoutMillis:
-            10000
-    });
-
-
-pool.on(
-    "error",
-    (error) => {
-
-        console.error(
-            "[DATABASE POOL] ERREUR :",
-            error.message
-        );
-    }
-);
+let progressionJobRunning = false;
 
 
 /* ============================================================
@@ -130,17 +66,15 @@ pool.on(
 app.use(
     cors({
         origin: true,
-        credentials: false
+        credentials: true
     })
 );
-
 
 app.use(
     express.json({
         limit: "10mb"
     })
 );
-
 
 app.use(
     express.urlencoded({
@@ -151,608 +85,497 @@ app.use(
 
 
 /* ============================================================
-   LOGGER
+   BASE DE DONNÉES
 ============================================================ */
 
-app.use(
-    (req, res, next) => {
+if (!DATABASE_URL) {
 
-        console.log(
-            `[BMJ API] ${req.method} ${req.originalUrl}`
+    console.error(
+        "[DATABASE] ERREUR : DATABASE_URL est absente."
+    );
+
+}
+
+
+/*
+   IMPORTANT :
+
+   Le mot de passe PostgreSQL ne doit pas être écrit
+   directement dans server.js.
+
+   Sur Render :
+   DATABASE_URL doit être configurée dans Environment.
+*/
+
+const pool = new Pool({
+
+    connectionString: DATABASE_URL,
+
+    ssl: {
+        rejectUnauthorized: false
+    },
+
+    max: 10,
+
+    idleTimeoutMillis: 30000,
+
+    connectionTimeoutMillis: 10000
+
+});
+
+
+pool.on(
+    "error",
+    (error) => {
+
+        console.error(
+            "[DATABASE] Erreur pool PostgreSQL :",
+            error.message
         );
 
-        next();
     }
 );
 
 
 /* ============================================================
-   OUTILS GÉNÉRAUX
+   HELPERS GÉNÉRAUX
 ============================================================ */
 
 function clean(value) {
 
     if (
-        value === null ||
-        value === undefined
+        value === undefined ||
+        value === null
     ) {
 
         return "";
+
     }
 
     return String(value).trim();
+
 }
 
 
-/* ------------------------------------------------------------
-   Nombre sécurisé
------------------------------------------------------------- */
+/* ============================================================
+   NOMBRES
+============================================================ */
 
 function safeNumber(
     value,
     fallback = 0
 ) {
 
-    const number =
-        Number(value);
+    const number = Number(value);
 
-    return Number.isFinite(number)
-        ? number
-        : fallback;
-}
+    if (!Number.isFinite(number)) {
 
+        return fallback;
 
-/* ------------------------------------------------------------
-   Progression normalisée
------------------------------------------------------------- */
-
-function normalizeProgression(
-    value
-) {
-
-    let progression =
-        Number(value);
-
-
-    if (
-        !Number.isFinite(progression)
-    ) {
-
-        progression = 0;
     }
 
+    return number;
 
-    progression =
-        Math.round(progression);
+}
 
 
-    return Math.max(
-        0,
-        Math.min(
-            100,
-            progression
+/* ============================================================
+   NORMALISATION PROGRESSION
+   UNE SEULE DÉFINITION
+============================================================ */
+
+function normalizeProgression(value) {
+
+    const number =
+        Number.parseInt(value, 10);
+
+    if (!Number.isFinite(number)) {
+
+        return 0;
+
+    }
+
+    return Math.min(
+        100,
+        Math.max(0, number)
+    );
+
+}
+
+
+/* ============================================================
+   LIMITER UNE PROGRESSION
+============================================================ */
+
+function clampProgress(value) {
+
+    return Math.min(
+        100,
+        Math.max(
+            0,
+            normalizeProgression(value)
         )
     );
+
 }
 
 
-/* ------------------------------------------------------------
-   Alias progression
------------------------------------------------------------- */
-
-function clampProgress(
-    value
-) {
-
-    return normalizeProgression(
-        value
-    );
-}
-
-
-/* ------------------------------------------------------------
-   Progression aléatoire
- *
- * 10 → 99
- *
- * 100 n'est jamais généré automatiquement.
------------------------------------------------------------- */
+/* ============================================================
+   PROGRESSION ALÉATOIRE
+============================================================ */
 
 function randomProgression() {
 
     return (
         Math.floor(
-            Math.random() * 90
-        ) + 10
+            Math.random() *
+            (PROGRESSION_MAX - PROGRESSION_MIN + 1)
+        ) +
+        PROGRESSION_MIN
     );
+
 }
 
 
-/* ------------------------------------------------------------
-   Vérifier Celestine
------------------------------------------------------------- */
+/* ============================================================
+   NOUVELLE PROGRESSION AUTOMATIQUE
+============================================================ */
 
-function isCelestine(
-    email
-) {
+function progressionAleatoire() {
 
-    return (
-        clean(email)
-            .toLowerCase() ===
-        EMAIL_UTILISATEUR_100
-            .trim()
-            .toLowerCase()
-    );
+    return randomProgression();
+
 }
 
 
-/* ------------------------------------------------------------
-   Valeur booléenne
------------------------------------------------------------- */
+/* ============================================================
+   VÉRIFICATION CELestine
+============================================================ */
 
-function booleanValue(
-    value
-) {
+function isCelestine(user) {
+
+    if (!user) {
+
+        return false;
+
+    }
 
     return (
+        clean(user.email).toLowerCase() ===
+        EMAIL_UTILISATEUR_100.toLowerCase()
+    );
+
+}
+
+
+/* ============================================================
+   BOOLEAN
+============================================================ */
+
+function booleanValue(value) {
+
+    if (
         value === true ||
-        value === "true" ||
         value === 1 ||
-        value === "1"
+        value === "1" ||
+        String(value).toLowerCase() === "true"
+    ) {
+
+        return true;
+
+    }
+
+    return false;
+
+}
+
+
+/* ============================================================
+   EMAIL
+============================================================ */
+
+function isValidEmail(email) {
+
+    const value = clean(email);
+
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+        value
     );
+
 }
 
 
-/* ------------------------------------------------------------
-   Email
------------------------------------------------------------- */
+/* ============================================================
+   HASH MOT DE PASSE
+============================================================ */
 
-function isValidEmail(
-    email
-) {
-
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-        .test(
-            clean(email)
-        );
-}
-
-
-/* ------------------------------------------------------------
-   Hash mot de passe
------------------------------------------------------------- */
-
-function hashPassword(
-    password
-) {
+function hashPassword(password) {
 
     return crypto
         .createHash("sha256")
-        .update(
-            String(password)
-        )
+        .update(String(password))
         .digest("hex");
+
 }
 
 
-/* ------------------------------------------------------------
-   Token administrateur
------------------------------------------------------------- */
+/* ============================================================
+   TOKEN
+============================================================ */
 
 function createToken() {
 
-    return crypto
-        .randomBytes(48)
-        .toString("hex");
+    return crypto.randomBytes(32).toString("hex");
+
 }
 
 
-/* ------------------------------------------------------------
-   Hash token
------------------------------------------------------------- */
+/* ============================================================
+   HASH TOKEN
+============================================================ */
 
-function tokenHash(
-    token
-) {
+function tokenHash(token) {
 
     return crypto
         .createHash("sha256")
-        .update(
-            String(token)
-        )
+        .update(String(token))
         .digest("hex");
+
 }
 
 
-/* ------------------------------------------------------------
-   Utilisateur public
------------------------------------------------------------- */
+/* ============================================================
+   UTILISATEUR PUBLIC
+============================================================ */
 
-function publicUser(
-    user
-) {
+function publicUser(user) {
 
     if (!user) {
 
         return null;
+
     }
-
-
-    const copy = {
-        ...user
-    };
-
-
-    delete copy.password;
-
-
-    return copy;
-}
-
-
-/* ============================================================
-   NORMALISATION DES MESSAGES
-============================================================ */
-
-function normalizeMessagePriority(
-    priority
-) {
-
-    const allowed = [
-
-        "normal",
-
-        "important",
-
-        "urgent"
-
-    ];
-
-
-    const value =
-        clean(priority)
-            .toLowerCase();
-
-
-    return allowed.includes(value)
-        ? value
-        : "normal";
-}
-
-
-/* ------------------------------------------------------------
-   Audience ancienne messagerie
------------------------------------------------------------- */
-
-function normalizeMessageAudience(
-    audience
-) {
-
-    const allowed = [
-
-        "user",
-
-        "all",
-
-        "premium",
-
-        "standard"
-
-    ];
-
-
-    const value =
-        clean(audience)
-            .toLowerCase();
-
-
-    return allowed.includes(value)
-        ? value
-        : "";
-}
-
-
-/* ------------------------------------------------------------
-   Sujet
------------------------------------------------------------- */
-
-function normalizeMessageSubject(
-    subject
-) {
-
-    const value =
-        clean(subject);
-
-
-    if (!value) {
-
-        return "Message BMJ SERVICE";
-    }
-
-
-    return value.substring(
-        0,
-        200
-    );
-}
-
-
-/* ------------------------------------------------------------
-   Contenu
------------------------------------------------------------- */
-
-function normalizeMessageContent(
-    message
-) {
-
-    return clean(message);
-}
-
-
-/* ------------------------------------------------------------
-   Données ancienne messagerie
------------------------------------------------------------- */
-
-function normalizeAdminMessageData(
-    body = {}
-) {
 
     return {
 
-        subject:
-            normalizeMessageSubject(
-                body.subject
+        id: user.id,
+
+        nom: user.nom,
+
+        sexe: user.sexe,
+
+        email: user.email,
+
+        telephone: user.telephone,
+
+        domaine: user.domaine,
+
+        pays: user.pays,
+
+        ville: user.ville,
+
+        niveau: user.niveau,
+
+        photo: user.photo,
+
+        progression:
+            normalizeProgression(
+                user.progression
             ),
 
-        message:
-            normalizeMessageContent(
-                body.message
+        is_premium:
+            booleanValue(
+                user.is_premium
             ),
 
-        priority:
-            normalizeMessagePriority(
-                body.priority
+        is_blocked:
+            booleanValue(
+                user.is_blocked
             ),
 
-        audience:
-            normalizeMessageAudience(
-                body.audience
-            )
+        certificat_autorise:
+            booleanValue(
+                user.certificat_autorise
+            ),
+
+        certificat_obtenu:
+            booleanValue(
+                user.certificat_obtenu
+            ),
+
+        premium_until:
+            user.premium_until,
+
+        last_login:
+            user.last_login,
+
+        created_at:
+            user.created_at
+
     };
+
 }
 
 
 /* ============================================================
-   NOUVEAU SYSTÈME SMS
+   NORMALISATION MESSAGES
 ============================================================ */
 
-/* ------------------------------------------------------------
-   Priorité SMS
------------------------------------------------------------- */
+function normalizeMessageData(data = {}) {
 
-function normalizeSmsPriority(
-    priority
-) {
+    return {
 
-    const allowed = [
+        sender_type:
+            clean(data.sender_type),
 
-        "normal",
+        sender_id:
+            safeNumber(
+                data.sender_id,
+                null
+            ),
 
-        "important",
+        recipient_user_id:
+            safeNumber(
+                data.recipient_user_id,
+                null
+            ),
 
-        "urgent"
+        audience:
+            clean(data.audience),
 
-    ];
+        subject:
+            clean(data.subject),
 
+        message:
+            clean(data.message),
 
-    const value =
-        clean(priority)
-            .toLowerCase();
+        priority:
+            clean(data.priority) ||
+            "normal",
 
+        is_read:
+            booleanValue(
+                data.is_read
+            ),
 
-    return allowed.includes(value)
-        ? value
-        : "normal";
+        is_archived:
+            booleanValue(
+                data.is_archived
+            ),
+
+        parent_id:
+            safeNumber(
+                data.parent_id,
+                null
+            )
+
+    };
+
 }
 
 
-/* ------------------------------------------------------------
-   Audience SMS
------------------------------------------------------------- */
+/* ============================================================
+   NORMALISATION SMS
+============================================================ */
 
-function normalizeSmsAudience(
-    audience
-) {
+function normalizeSmsData(data = {}) {
 
-    const allowed = [
+    return {
 
-        "user",
+        sender_type:
+            clean(data.sender_type),
 
-        "all",
+        sender_id:
+            safeNumber(
+                data.sender_id,
+                null
+            ),
 
-        "premium",
+        recipient_user_id:
+            safeNumber(
+                data.recipient_user_id,
+                null
+            ),
 
-        "standard"
+        recipient_phone:
+            clean(
+                data.recipient_phone
+            ),
 
-    ];
+        message:
+            clean(data.message),
 
+        status:
+            clean(data.status) ||
+            "pending",
 
-    const value =
-        clean(audience)
-            .toLowerCase();
+        provider:
+            clean(data.provider),
 
+        provider_message_id:
+            clean(
+                data.provider_message_id
+            ),
 
-    return allowed.includes(value)
-        ? value
-        : "user";
+        error_message:
+            clean(
+                data.error_message
+            ),
+
+        parent_id:
+            safeNumber(
+                data.parent_id,
+                null
+            )
+
+    };
+
 }
 
 
-/* ------------------------------------------------------------
-   Sujet SMS
------------------------------------------------------------- */
+/* ============================================================
+   RÉCUPÉRER ID UTILISATEUR SMS
+============================================================ */
 
-function normalizeSmsSubject(
-    subject
+async function getSmsUserId(
+    email
 ) {
 
-    const value =
-        clean(subject);
-
-
-    if (!value) {
-
-        return "BMJ SERVICE";
-    }
-
-
-    return value.substring(
-        0,
-        200
-    );
-}
-
-
-/* ------------------------------------------------------------
-   Message SMS
------------------------------------------------------------- */
-
-function normalizeSmsMessage(
-    message
-) {
-
-    const value =
-        clean(message);
-
-
-    if (value.length > 10000) {
-
-        return value.substring(
-            0,
-            10000
+    const result =
+        await pool.query(
+            `
+            SELECT id
+            FROM users
+            WHERE LOWER(TRIM(email))
+                = LOWER(TRIM($1))
+            LIMIT 1
+            `,
+            [email]
         );
-    }
 
-
-    return value;
-}
-
-
-/* ------------------------------------------------------------
-   Extraction ID utilisateur SMS
------------------------------------------------------------- */
-
-function getSmsUserId(
-    body = {}
-) {
-
-    const possibleValues = [
-
-        body.user_id,
-
-        body.userId,
-
-        body.recipient_user_id,
-
-        body.recipientUserId,
-
-        body.id_user,
-
-        body.idUser
-
-    ];
-
-
-    for (
-        const value
-        of possibleValues
+    if (
+        !result.rows.length
     ) {
 
-        if (
-            value !== undefined &&
-            value !== null &&
-            value !== ""
-        ) {
+        return null;
 
-            const id =
-                Number(value);
-
-
-            if (
-                Number.isInteger(id) &&
-                id > 0
-            ) {
-
-                return id;
-            }
-        }
     }
 
+    return result.rows[0].id;
 
-    return null;
-}
-
-
-/* ------------------------------------------------------------
-   Données SMS
------------------------------------------------------------- */
-
-function normalizeSmsData(
-    body = {}
-) {
-
-    return {
-
-        subject:
-            normalizeSmsSubject(
-                body.subject
-            ),
-
-        message:
-            normalizeSmsMessage(
-                body.message
-            ),
-
-        priority:
-            normalizeSmsPriority(
-                body.priority
-            ),
-
-        audience:
-            normalizeSmsAudience(
-                body.audience
-            ),
-
-        parentId:
-            Number.isInteger(
-                Number(body.parent_id)
-            )
-                ? Number(body.parent_id)
-                : null
-    };
 }
 
 
 /* ============================================================
-   ADMIN TOKENS
+   AUTH ADMIN
 ============================================================ */
 
-const adminTokens =
-    new Map();
-
-
-/* ------------------------------------------------------------
-   Récupérer token
------------------------------------------------------------- */
-
-function getAdminToken(
-    req
-) {
+function getAdminToken(req) {
 
     const authorization =
-        req.headers.authorization ||
-        "";
-
+        clean(
+            req.headers.authorization
+        );
 
     if (
         authorization &&
@@ -764,40 +587,42 @@ function getAdminToken(
         return authorization
             .substring(7)
             .trim();
+
     }
 
 
     const headerToken =
-        req.headers["x-admin-token"];
-
+        clean(
+            req.headers["x-admin-token"]
+        );
 
     if (headerToken) {
 
-        return String(
-            headerToken
-        ).trim();
+        return headerToken;
+
     }
 
 
     const queryToken =
-        req.query.token;
-
+        clean(
+            req.query.token
+        );
 
     if (queryToken) {
 
-        return String(
-            queryToken
-        ).trim();
+        return queryToken;
+
     }
 
 
-    return null;
+    return "";
+
 }
 
 
-/* ------------------------------------------------------------
-   Authentification admin
------------------------------------------------------------- */
+/* ============================================================
+   AUTHENTIFICATION ADMIN
+============================================================ */
 
 function adminAuth(
     req,
@@ -805,65 +630,83 @@ function adminAuth(
     next
 ) {
 
-    const token =
-        getAdminToken(req);
+    try {
+
+        const token =
+            getAdminToken(req);
+
+        if (!token) {
+
+            return res
+                .status(401)
+                .json({
+
+                    success: false,
+
+                    message:
+                        "Token administrateur manquant."
+
+                });
+
+        }
 
 
-    if (!token) {
+        const hash =
+            tokenHash(token);
 
-        return res.status(401).json({
+        if (
+            !adminTokens.has(hash)
+        ) {
 
-            success: false,
+            return res
+                .status(403)
+                .json({
 
-            message:
-                "Token administrateur manquant",
+                    success: false,
 
-            code:
-                "ADMIN_TOKEN_MISSING"
-        });
-    }
+                    message:
+                        "Token administrateur invalide."
+
+                });
+
+        }
 
 
-    const saved =
-        adminTokens.get(
-            tokenHash(token)
+        req.adminToken = token;
+
+        next();
+
+    } catch (error) {
+
+        console.error(
+            "[ADMIN AUTH]",
+            error
         );
 
+        return res
+            .status(500)
+            .json({
 
-    if (!saved) {
+                success: false,
 
-        return res.status(401).json({
+                message:
+                    "Erreur authentification administrateur."
 
-            success: false,
+            });
 
-            message:
-                "Token administrateur invalide",
-
-            code:
-                "ADMIN_TOKEN_INVALID"
-        });
     }
 
-
-    req.admin =
-        saved;
-
-
-    req.adminToken =
-        token;
-
-
-    next();
 }
 
 
 /* ============================================================
-   JOURNAL ADMIN
+   LOG ADMIN
 ============================================================ */
 
 async function logAdminAction(
+    adminId,
     action,
-    details
+    details = null
 ) {
 
     try {
@@ -872,8 +715,8 @@ async function logAdminAction(
             `
             INSERT INTO admin_activity
             (
+                admin_id,
                 action,
-                admin_email,
                 details,
                 created_at
             )
@@ -886,54 +729,53 @@ async function logAdminAction(
             )
             `,
             [
-
+                adminId,
                 clean(action),
-
-                ADMIN_EMAIL,
-
-                clean(details)
-
+                details
+                    ? JSON.stringify(details)
+                    : null
             ]
         );
-
-
-        return true;
 
     } catch (error) {
 
         console.error(
-            "[ADMIN LOG] ERREUR :",
+            "[ADMIN ACTIVITY]",
             error.message
         );
 
-
-        return false;
     }
+
 }
 
 
+/* ============================================================
+   LOG ADMIN SÉCURISÉ
+============================================================ */
+
 async function safeLogAdminAction(
+    adminId,
     action,
-    description
+    details = null
 ) {
 
     try {
 
-        return await logAdminAction(
+        await logAdminAction(
+            adminId,
             action,
-            description
+            details
         );
 
     } catch (error) {
 
         console.error(
-            "[BMJ ADMIN LOG] ERREUR :",
+            "[SAFE ADMIN LOG]",
             error.message
         );
 
-
-        return false;
     }
+
 }
 
 
@@ -944,23 +786,10 @@ async function safeLogAdminAction(
 async function logUserActivity(
     userId,
     action,
-    details = ""
+    details = null
 ) {
 
     try {
-
-        const id =
-            Number(userId);
-
-
-        if (
-            !Number.isInteger(id) ||
-            id <= 0
-        ) {
-
-            return false;
-        }
-
 
         await pool.query(
             `
@@ -980,38 +809,31 @@ async function logUserActivity(
             )
             `,
             [
-
-                id,
-
+                userId,
                 clean(action),
-
-                clean(details)
-
+                details
+                    ? JSON.stringify(details)
+                    : null
             ]
         );
-
-
-        return true;
 
     } catch (error) {
 
         console.error(
-            "[USER ACTIVITY] ERREUR :",
+            "[USER ACTIVITY]",
             error.message
         );
 
-
-        return false;
     }
+
 }
 
 
 /* ============================================================
-   NOTIFICATIONS
+   NOTIFICATION
 ============================================================ */
 
 async function createNotification(
-    clientOrPool,
     userId,
     title,
     message,
@@ -1020,20 +842,7 @@ async function createNotification(
 
     try {
 
-        const id =
-            Number(userId);
-
-
-        if (
-            !Number.isInteger(id) ||
-            id <= 0
-        ) {
-
-            return false;
-        }
-
-
-        await clientOrPool.query(
+        await pool.query(
             `
             INSERT INTO notifications
             (
@@ -1050,51 +859,48 @@ async function createNotification(
                 $2,
                 $3,
                 $4,
-                FALSE,
+                false,
                 CURRENT_TIMESTAMP
             )
             `,
             [
-
-                id,
-
+                userId,
                 clean(title),
-
                 clean(message),
-
-                clean(type) || "info"
-
+                clean(type)
             ]
         );
-
-
-        return true;
 
     } catch (error) {
 
         console.error(
-            "[BMJ NOTIFICATION] ERREUR :",
+            "[NOTIFICATION]",
             error.message
         );
 
-
-        return false;
     }
+
 }
 
 
 /* ============================================================
    INITIALISATION BASE DE DONNÉES
-   100 % NON DESTRUCTIVE
+   NON DESTRUCTIVE
 ============================================================ */
 
 async function initDatabase() {
 
+    console.log(
+        "[DATABASE] Initialisation PostgreSQL..."
+    );
+
+
     if (!DATABASE_URL) {
 
         throw new Error(
-            "DATABASE_URL n'est pas configurée."
+            "DATABASE_URL est absente."
         );
+
     }
 
 
@@ -1104,8 +910,8 @@ async function initDatabase() {
 
     try {
 
-        console.log(
-            "[DATABASE] Initialisation PostgreSQL..."
+        await client.query(
+            "BEGIN"
         );
 
 
@@ -1141,13 +947,13 @@ async function initDatabase() {
 
                 progression INTEGER DEFAULT 0,
 
-                is_premium BOOLEAN DEFAULT FALSE,
+                is_premium BOOLEAN DEFAULT false,
 
-                is_blocked BOOLEAN DEFAULT FALSE,
+                is_blocked BOOLEAN DEFAULT false,
 
-                certificat_autorise BOOLEAN DEFAULT FALSE,
+                certificat_autorise BOOLEAN DEFAULT false,
 
-                certificat_obtenu BOOLEAN DEFAULT FALSE,
+                certificat_obtenu BOOLEAN DEFAULT false,
 
                 premium_until TIMESTAMP NULL,
 
@@ -1155,46 +961,63 @@ async function initDatabase() {
 
                 notes_admin TEXT,
 
-                created_at TIMESTAMP
-                    DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-                updated_at TIMESTAMP
-                    DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                progression_last_updated_at TIMESTAMP NULL
             )
             `
         );
 
 
+        /* ====================================================
+           AJOUT DES COLONNES MANQUANTES USERS
+        ==================================================== */
+
         const userColumns = {
 
-            sexe: "TEXT",
+            nom:
+                "TEXT",
 
-            telephone: "TEXT",
+            sexe:
+                "TEXT",
 
-            domaine: "TEXT",
+            telephone:
+                "TEXT",
 
-            pays: "TEXT",
+            domaine:
+                "TEXT",
 
-            ville: "TEXT",
+            pays:
+                "TEXT",
 
-            niveau: "TEXT",
+            ville:
+                "TEXT",
 
-            photo: "TEXT",
+            niveau:
+                "TEXT",
+
+            password:
+                "TEXT",
+
+            photo:
+                "TEXT",
 
             progression:
                 "INTEGER DEFAULT 0",
 
             is_premium:
-                "BOOLEAN DEFAULT FALSE",
+                "BOOLEAN DEFAULT false",
 
             is_blocked:
-                "BOOLEAN DEFAULT FALSE",
+                "BOOLEAN DEFAULT false",
 
             certificat_autorise:
-                "BOOLEAN DEFAULT FALSE",
+                "BOOLEAN DEFAULT false",
 
             certificat_obtenu:
-                "BOOLEAN DEFAULT FALSE",
+                "BOOLEAN DEFAULT false",
 
             premium_until:
                 "TIMESTAMP NULL",
@@ -1209,29 +1032,32 @@ async function initDatabase() {
                 "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
 
             updated_at:
-                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+
+            progression_last_updated_at:
+                "TIMESTAMP NULL"
+
         };
 
 
         for (
             const [column, type]
-            of Object.entries(
-                userColumns
-            )
+            of Object.entries(userColumns)
         ) {
 
             await client.query(
                 `
                 ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS
-                ${column} ${type}
+                ADD COLUMN IF NOT EXISTS ${column}
+                ${type}
                 `
             );
+
         }
 
 
         /* ====================================================
-           PAIEMENTS
+           DEMANDES PAIEMENT
         ==================================================== */
 
         await client.query(
@@ -1242,19 +1068,21 @@ async function initDatabase() {
 
                 user_id INTEGER,
 
-                telephone_paiement TEXT,
+                email TEXT,
+
+                nom TEXT,
+
+                plan TEXT,
 
                 montant NUMERIC(12,2),
 
                 methode TEXT,
 
+                reference TEXT,
+
                 statut TEXT DEFAULT 'pending',
 
-                reference_paiement TEXT,
-
-                preuve_paiement TEXT,
-
-                admin_note TEXT,
+                notes TEXT,
 
                 created_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP,
@@ -1264,57 +1092,6 @@ async function initDatabase() {
             )
             `
         );
-
-
-        const paymentColumns = {
-
-            user_id:
-                "INTEGER",
-
-            telephone_paiement:
-                "TEXT",
-
-            montant:
-                "NUMERIC(12,2)",
-
-            methode:
-                "TEXT",
-
-            statut:
-                "TEXT DEFAULT 'pending'",
-
-            reference_paiement:
-                "TEXT",
-
-            preuve_paiement:
-                "TEXT",
-
-            admin_note:
-                "TEXT",
-
-            created_at:
-                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-
-            updated_at:
-                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-        };
-
-
-        for (
-            const [column, type]
-            of Object.entries(
-                paymentColumns
-            )
-        ) {
-
-            await client.query(
-                `
-                ALTER TABLE demandes_paiement
-                ADD COLUMN IF NOT EXISTS
-                ${column} ${type}
-                `
-            );
-        }
 
 
         /* ====================================================
@@ -1327,9 +1104,9 @@ async function initDatabase() {
             (
                 id SERIAL PRIMARY KEY,
 
-                action TEXT,
+                admin_id INTEGER,
 
-                admin_email TEXT,
+                action TEXT,
 
                 details TEXT,
 
@@ -1341,11 +1118,8 @@ async function initDatabase() {
 
 
         /* ====================================================
-           ANCIENS MESSAGES
-           
-           IMPORTANT :
-           Cette table est conservée.
-           AUCUNE donnée existante n'est supprimée.
+           MESSAGES
+           TABLE EXISTANTE CONSERVÉE
         ==================================================== */
 
         await client.query(
@@ -1356,11 +1130,9 @@ async function initDatabase() {
 
                 sender_type TEXT,
 
-                sender_id INTEGER NULL,
+                sender_id INTEGER,
 
-                recipient_type TEXT,
-
-                recipient_user_id INTEGER NULL,
+                recipient_user_id INTEGER,
 
                 audience TEXT,
 
@@ -1370,9 +1142,9 @@ async function initDatabase() {
 
                 priority TEXT DEFAULT 'normal',
 
-                is_read BOOLEAN DEFAULT FALSE,
+                is_read BOOLEAN DEFAULT false,
 
-                is_archived BOOLEAN DEFAULT FALSE,
+                is_archived BOOLEAN DEFAULT false,
 
                 parent_id INTEGER NULL,
 
@@ -1392,13 +1164,10 @@ async function initDatabase() {
                 "TEXT",
 
             sender_id:
-                "INTEGER NULL",
-
-            recipient_type:
-                "TEXT",
+                "INTEGER",
 
             recipient_user_id:
-                "INTEGER NULL",
+                "INTEGER",
 
             audience:
                 "TEXT",
@@ -1413,10 +1182,10 @@ async function initDatabase() {
                 "TEXT DEFAULT 'normal'",
 
             is_read:
-                "BOOLEAN DEFAULT FALSE",
+                "BOOLEAN DEFAULT false",
 
             is_archived:
-                "BOOLEAN DEFAULT FALSE",
+                "BOOLEAN DEFAULT false",
 
             parent_id:
                 "INTEGER NULL",
@@ -1426,6 +1195,7 @@ async function initDatabase() {
 
             updated_at:
                 "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+
         };
 
 
@@ -1439,20 +1209,17 @@ async function initDatabase() {
             await client.query(
                 `
                 ALTER TABLE messages
-                ADD COLUMN IF NOT EXISTS
-                ${column} ${type}
+                ADD COLUMN IF NOT EXISTS ${column}
+                ${type}
                 `
             );
+
         }
 
 
         /* ====================================================
-           NOUVEAU SYSTÈME SMS
-           
-           IMPORTANT :
-           Table complètement indépendante.
-           
-           L'ancienne table messages n'est PAS modifiée.
+           SMS
+           TABLE INDÉPENDANTE
         ==================================================== */
 
         await client.query(
@@ -1461,35 +1228,25 @@ async function initDatabase() {
             (
                 id SERIAL PRIMARY KEY,
 
-                sender_type TEXT
-                    NOT NULL DEFAULT 'admin',
+                sender_type TEXT,
 
-                sender_id INTEGER NULL,
+                sender_id INTEGER,
 
-                recipient_user_id INTEGER
-                    NOT NULL,
+                recipient_user_id INTEGER,
 
-                subject TEXT,
+                recipient_phone TEXT,
 
-                message TEXT
-                    NOT NULL,
+                message TEXT,
 
-                priority TEXT
-                    DEFAULT 'normal',
+                status TEXT DEFAULT 'pending',
 
-                audience TEXT
-                    DEFAULT 'user',
+                provider TEXT,
 
-                is_read BOOLEAN
-                    DEFAULT FALSE,
+                provider_message_id TEXT,
 
-                is_archived BOOLEAN
-                    DEFAULT FALSE,
+                error_message TEXT,
 
                 parent_id INTEGER NULL,
-
-                status TEXT
-                    DEFAULT 'sent',
 
                 created_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP,
@@ -1499,66 +1256,6 @@ async function initDatabase() {
             )
             `
         );
-
-
-        const smsColumns = {
-
-            sender_type:
-                "TEXT DEFAULT 'admin'",
-
-            sender_id:
-                "INTEGER NULL",
-
-            recipient_user_id:
-                "INTEGER",
-
-            subject:
-                "TEXT",
-
-            message:
-                "TEXT",
-
-            priority:
-                "TEXT DEFAULT 'normal'",
-
-            audience:
-                "TEXT DEFAULT 'user'",
-
-            is_read:
-                "BOOLEAN DEFAULT FALSE",
-
-            is_archived:
-                "BOOLEAN DEFAULT FALSE",
-
-            parent_id:
-                "INTEGER NULL",
-
-            status:
-                "TEXT DEFAULT 'sent'",
-
-            created_at:
-                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-
-            updated_at:
-                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-        };
-
-
-        for (
-            const [column, type]
-            of Object.entries(
-                smsColumns
-            )
-        ) {
-
-            await client.query(
-                `
-                ALTER TABLE sms_messages
-                ADD COLUMN IF NOT EXISTS
-                ${column} ${type}
-                `
-            );
-        }
 
 
         /* ====================================================
@@ -1579,7 +1276,7 @@ async function initDatabase() {
 
                 type TEXT DEFAULT 'info',
 
-                is_read BOOLEAN DEFAULT FALSE,
+                is_read BOOLEAN DEFAULT false,
 
                 created_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
@@ -1600,79 +1297,19 @@ async function initDatabase() {
 
                 user_id INTEGER,
 
-                domaine TEXT,
+                nom TEXT,
 
-                titre TEXT,
+                domaine TEXT,
 
                 certificat_url TEXT,
 
-                certificate_code TEXT,
-
-                is_authorized BOOLEAN DEFAULT FALSE,
-
-                downloaded BOOLEAN DEFAULT FALSE,
-
-                downloaded_at TIMESTAMP NULL,
+                statut TEXT DEFAULT 'pending',
 
                 created_at TIMESTAMP
-                    DEFAULT CURRENT_TIMESTAMP,
-
-                updated_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
             )
             `
         );
-
-
-        const certificateColumns = {
-
-            user_id:
-                "INTEGER",
-
-            domaine:
-                "TEXT",
-
-            titre:
-                "TEXT",
-
-            certificat_url:
-                "TEXT",
-
-            certificate_code:
-                "TEXT",
-
-            is_authorized:
-                "BOOLEAN DEFAULT FALSE",
-
-            downloaded:
-                "BOOLEAN DEFAULT FALSE",
-
-            downloaded_at:
-                "TIMESTAMP NULL",
-
-            created_at:
-                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-
-            updated_at:
-                "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-        };
-
-
-        for (
-            const [column, type]
-            of Object.entries(
-                certificateColumns
-            )
-        ) {
-
-            await client.query(
-                `
-                ALTER TABLE certificates
-                ADD COLUMN IF NOT EXISTS
-                ${column} ${type}
-                `
-            );
-        }
 
 
         /* ====================================================
@@ -1687,15 +1324,12 @@ async function initDatabase() {
 
                 user_id INTEGER,
 
-                domaine TEXT,
+                course_id INTEGER,
 
                 progression INTEGER DEFAULT 0,
 
-                chapitre_actuel INTEGER DEFAULT 0,
-
-                chapitre_total INTEGER DEFAULT 0,
-
-                statut TEXT DEFAULT 'En cours',
+                created_at TIMESTAMP
+                    DEFAULT CURRENT_TIMESTAMP,
 
                 updated_at TIMESTAMP
                     DEFAULT CURRENT_TIMESTAMP
@@ -1740,8 +1374,17 @@ async function initDatabase() {
         );
 
 
+        await client.query(
+            `
+            CREATE INDEX IF NOT EXISTS
+            idx_users_progression_timer
+            ON users(progression_last_updated_at)
+            `
+        );
+
+
         /* ====================================================
-           INDEX ANCIENS MESSAGES
+           INDEX MESSAGES
         ==================================================== */
 
         await client.query(
@@ -1766,7 +1409,7 @@ async function initDatabase() {
             `
             CREATE INDEX IF NOT EXISTS
             idx_messages_sender
-            ON messages(sender_type, sender_id)
+            ON messages(sender_id)
             `
         );
 
@@ -1775,7 +1418,7 @@ async function initDatabase() {
             `
             CREATE INDEX IF NOT EXISTS
             idx_messages_created
-            ON messages(created_at DESC)
+            ON messages(created_at)
             `
         );
 
@@ -1806,7 +1449,7 @@ async function initDatabase() {
             `
             CREATE INDEX IF NOT EXISTS
             idx_sms_created
-            ON sms_messages(created_at DESC)
+            ON sms_messages(created_at)
             `
         );
 
@@ -1834,28 +1477,33 @@ async function initDatabase() {
 
 
         /* ====================================================
-           INDEX PROGRESSION
+           INDEX USER PROGRESS
         ==================================================== */
 
         await client.query(
             `
             CREATE INDEX IF NOT EXISTS
-            idx_progress_user
+            idx_user_progress_user
             ON user_progress(user_id)
             `
         );
 
 
         /* ====================================================
-           INDEX ACTIVITY
+           INDEX USER ACTIVITY
         ==================================================== */
 
         await client.query(
             `
             CREATE INDEX IF NOT EXISTS
-            idx_activity_user
+            idx_user_activity_user
             ON user_activity(user_id)
             `
+        );
+
+
+        await client.query(
+            "COMMIT"
         );
 
 
@@ -1863,25 +1511,32 @@ async function initDatabase() {
             "[DATABASE] Initialisation terminée."
         );
 
+
     } catch (error) {
 
-        console.error(
-            "[DATABASE] ERREUR :",
-            error
+        await client.query(
+            "ROLLBACK"
         );
 
+        console.error(
+            "[DATABASE] Erreur initialisation :",
+            error
+        );
 
         throw error;
 
     } finally {
 
         client.release();
+
     }
+
 }
 
 
 /* ============================================================
-   CELESTINE = 100 %
+   CELestine = 100 %
+   PERMANENT
 ============================================================ */
 
 async function ensureCelestineCompleted() {
@@ -1895,7 +1550,12 @@ async function ensureCelestineCompleted() {
 
                 SET
                     progression = 100,
-                    updated_at = CURRENT_TIMESTAMP
+
+                    progression_last_updated_at =
+                        COALESCE(
+                            progression_last_updated_at,
+                            CURRENT_TIMESTAMP
+                        )
 
                 WHERE
                     LOWER(TRIM(email))
@@ -1903,10 +1563,12 @@ async function ensureCelestineCompleted() {
                     LOWER(TRIM($1))
 
                 AND
-                    COALESCE(
-                        progression,
-                        0
-                    ) <> 100
+                (
+                    COALESCE(progression, 0) <> 100
+
+                    OR
+                    progression_last_updated_at IS NULL
+                )
 
                 RETURNING
                     id,
@@ -1919,184 +1581,80 @@ async function ensureCelestineCompleted() {
             );
 
 
-        if (
-            result.rows.length > 0
-        ) {
+        if (result.rows.length) {
 
             console.log(
-                `[PROGRESSION AUTO] ${EMAIL_UTILISATEUR_100} → 100%`
+                "[PROGRESSION] Utilisateur 100% :",
+                result.rows[0].email
             );
+
         }
+
+        return result.rows[0] || null;
 
     } catch (error) {
 
         console.error(
-            "[PROGRESSION AUTO] CELESTINE :",
+            "[PROGRESSION] Erreur Celestine :",
             error.message
         );
-    }
-}
 
-/* ============================================================
-   PROGRESSION AUTOMATIQUE — PREMIUM UNIQUEMENT
-   ============================================================
+        return null;
 
-   RÈGLES :
-
-   1. UTILISATEUR STANDARD
-      → aucune progression automatique
-      → sa progression reste inchangée
-
-   2. UTILISATEUR PREMIUM
-      → progression automatique toutes les 24 heures
-      → ajout aléatoire de +1 à +5 %
-      → arrêt automatique à 100 %
-
-   3. ADMIN
-      → peut toujours modifier manuellement
-        la progression avec la route PATCH prévue plus bas.
-
-   IMPORTANT :
-   → La progression automatique ne dépend PAS de la connexion
-     de l'utilisateur.
-   → Elle fonctionne côté serveur.
-   → Elle fonctionne uniquement pour is_premium = true.
-============================================================ */
-
-
-/* ============================================================
-   CONFIGURATION
-============================================================ */
-
-/*
- * Minimum ajouté à chaque progression automatique.
- */
-const PROGRESSION_MIN = 1;
-
-
-/*
- * Maximum ajouté à chaque progression automatique.
- */
-const PROGRESSION_MAX = 5;
-
-
-/*
- * Délai entre deux progressions automatiques.
- *
- * 24 heures =
- * 24 × 60 × 60 × 1000 millisecondes
- */
-const DELAI_PROGRESSION_24H =
-    24 * 60 * 60 * 1000;
-
-
-/* ============================================================
-   OUTIL : NORMALISER UNE PROGRESSION
-============================================================ */
-
-function normalizeProgression(value) {
-
-    const nombre =
-        Number(value);
-
-    if (
-        !Number.isFinite(nombre)
-    ) {
-
-        return 0;
     }
 
-    return Math.max(
-        0,
-        Math.min(
-            100,
-            Math.round(nombre)
-        )
-    );
 }
 
 
 /* ============================================================
-   OUTIL : GÉNÉRER UNE AUGMENTATION ALÉATOIRE
-============================================================ */
-
-function progressionAleatoire() {
-
-    return Math.floor(
-        Math.random() *
-        (
-            PROGRESSION_MAX -
-            PROGRESSION_MIN +
-            1
-        )
-    ) + PROGRESSION_MIN;
-}
-
-
-/* ============================================================
-   VÉRIFIER SI L'UTILISATEUR EST PREMIUM
+   VÉRIFIER UTILISATEUR PREMIUM
 ============================================================ */
 
 function isPremiumUser(user) {
 
-    /*
-     * PostgreSQL peut retourner :
-     *
-     * true
-     * false
-     *
-     * Mais cette fonction accepte également
-     * "true" / "1" au cas où les données
-     * viendraient d'une autre source.
-     */
+    if (!user) {
 
-    return (
-        user &&
-        (
-            user.is_premium === true ||
-            user.is_premium === "true" ||
-            user.is_premium === 1 ||
-            user.is_premium === "1"
-        )
+        return false;
+
+    }
+
+    return booleanValue(
+        user.is_premium
     );
+
 }
 
 
 /* ============================================================
-   INITIALISATION DES PROGRESSIONS PREMIUM
+   INITIALISATION DES PROGRESSIONS
+   VERSION CORRIGÉE
+
+   IMPORTANT :
+   - chaque utilisateur est traité individuellement
+   - aucune progression globale
+   - aucun updated_at
+   - timer propre à chaque utilisateur
 ============================================================ */
 
-/*
- * Cette fonction initialise UNIQUEMENT les utilisateurs PREMIUM
- * qui n'ont pas encore de progression.
- *
- * UTILISATEUR STANDARD :
- * → ignoré complètement.
- *
- * UTILISATEUR PREMIUM :
- * → reçoit une progression initiale aléatoire entre 1 et 5 %
- *   uniquement si sa progression est NULL ou 0.
- *
- * Une progression existante n'est jamais remplacée.
- */
+async function initializeUserProgressions() {
 
-async function initializePremiumProgressions() {
+    console.log(
+        "[PROGRESSION AUTO] Initialisation du système..."
+    );
+
 
     try {
 
-        console.log(
-            "[PROGRESSION PREMIUM] Initialisation..."
-        );
+        /*
+           Toujours garantir Celestine à 100 %
+        */
+
+        await ensureCelestineCompleted();
 
 
         /*
-         * IMPORTANT :
-         *
-         * is_premium = TRUE
-         *
-         * garantit que les utilisateurs standards
-         * ne sont jamais concernés.
-         */
+           On récupère UNIQUEMENT les utilisateurs PREMIUM.
+        */
 
         const result =
             await pool.query(
@@ -2106,31 +1664,22 @@ async function initializePremiumProgressions() {
                     email,
                     progression,
                     is_premium,
-                    updated_at
+                    progression_last_updated_at
 
                 FROM users
 
                 WHERE
-                    COALESCE(is_premium, false) = true
-
-                AND
-                    (
-                        progression IS NULL
-                        OR
-                        progression <= 0
-                    )
+                    COALESCE(is_premium, false)
+                    = true
 
                 ORDER BY id ASC
                 `
             );
 
 
-        let nombreInitialise = 0;
+        let initialized = 0;
+        let timersInitialized = 0;
 
-
-        /*
-         * Traiter chaque utilisateur séparément.
-         */
 
         for (
             const user
@@ -2138,67 +1687,77 @@ async function initializePremiumProgressions() {
         ) {
 
             /*
-             * Double sécurité :
-             *
-             * même si une donnée inattendue
-             * arrive dans result.rows,
-             * on vérifie encore le statut Premium.
-             */
+               Sécurité supplémentaire :
+               Celestine reste toujours à 100 %.
+            */
 
             if (
-                !isPremiumUser(user)
+                isCelestine(user)
             ) {
 
-                console.log(
-                    `[PROGRESSION PREMIUM] ${user.email} ignoré : utilisateur standard.`
+                await pool.query(
+                    `
+                    UPDATE users
+
+                    SET
+                        progression = 100,
+
+                        progression_last_updated_at =
+                            COALESCE(
+                                progression_last_updated_at,
+                                CURRENT_TIMESTAMP
+                            )
+
+                    WHERE id = $1
+                    `,
+                    [
+                        user.id
+                    ]
                 );
 
                 continue;
+
             }
 
 
-            /*
-             * Générer une petite progression initiale.
-             */
-
-            const nouvelleProgression =
-                progressionAleatoire();
+            const progression =
+                normalizeProgression(
+                    user.progression
+                );
 
 
             /*
-             * Mise à jour uniquement si :
-             *
-             * - l'utilisateur est Premium
-             * - progression NULL ou <= 0
-             */
+               CAS 1 :
+               aucune progression.
 
-            const updateResult =
+               On donne une valeur aléatoire
+               INDIVIDUELLE à cet utilisateur.
+            */
+
+            if (
+                progression <= 0
+            ) {
+
+                const nouvelleProgression =
+                    progressionAleatoire();
+
+
                 await pool.query(
                     `
                     UPDATE users
 
                     SET
                         progression = $1,
-                        updated_at = CURRENT_TIMESTAMP
+
+                        progression_last_updated_at =
+                            CURRENT_TIMESTAMP
 
                     WHERE
                         id = $2
 
                     AND
-                        COALESCE(is_premium, false) = true
-
-                    AND
-                        (
-                            progression IS NULL
-                            OR
-                            progression <= 0
-                        )
-
-                    RETURNING
-                        id,
-                        email,
-                        progression,
-                        is_premium
+                        COALESCE(is_premium, false)
+                        = true
                     `,
                     [
                         nouvelleProgression,
@@ -2207,73 +1766,164 @@ async function initializePremiumProgressions() {
                 );
 
 
+                console.log(
+                    `[PROGRESSION AUTO] ${user.email} -> ${nouvelleProgression}%`
+                );
+
+
+                initialized++;
+
+                continue;
+
+            }
+
+
+            /*
+               CAS 2 :
+               progression existante mais aucun
+               timestamp de progression.
+
+               On NE change PAS la progression.
+
+               On démarre simplement le compteur
+               de 24 heures pour cet utilisateur.
+            */
+
             if (
-                updateResult.rows.length > 0
+                !user.progression_last_updated_at
             ) {
 
-                nombreInitialise++;
+                await pool.query(
+                    `
+                    UPDATE users
+
+                    SET
+                        progression_last_updated_at =
+                            CURRENT_TIMESTAMP
+
+                    WHERE
+                        id = $1
+
+                    AND
+                        COALESCE(is_premium, false)
+                        = true
+
+                    AND
+                        progression_last_updated_at IS NULL
+                    `,
+                    [
+                        user.id
+                    ]
+                );
 
 
                 console.log(
-                    `[PROGRESSION PREMIUM] ${user.email} → ${nouvelleProgression}%`
+                    `[PROGRESSION AUTO] Timer démarré pour ${user.email}`
                 );
+
+
+                timersInitialized++;
+
             }
+
         }
 
 
         console.log(
-            `[PROGRESSION PREMIUM] ${nombreInitialise} utilisateur(s) Premium initialisé(s).`
+            `[PROGRESSION AUTO] Initialisation terminée : ${initialized} progression(s), ${timersInitialized} timer(s).`
         );
 
+
+        return true;
 
     } catch (error) {
 
         console.error(
-            "[PROGRESSION PREMIUM] ERREUR INITIALISATION :",
-            error.message
+            "[PROGRESSION AUTO] Erreur initialisation :",
+            error
         );
+
+        return false;
+
     }
+
 }
 
 
 /* ============================================================
-   MISE À JOUR AUTOMATIQUE — PREMIUM UNIQUEMENT
+   COMPATIBILITÉ ANCIEN NOM
+
+   Ton ancien code appelait :
+
+       initializePremiumProgressions()
+
+   On le conserve pour éviter :
+       ReferenceError
 ============================================================ */
 
-/*
- * Cette fonction est le cœur du système.
- *
- * ELLE NE MODIFIE QUE LES PREMIUM.
- *
- * STANDARD :
- * → aucune requête UPDATE
- *
- * PREMIUM :
- * → vérification des 24 heures
- * → +1 à +5 %
- * → maximum 100 %
- */
+async function initializePremiumProgressions() {
+
+    return initializeUserProgressions();
+
+}
+
+
+/* ============================================================
+   MISE À JOUR AUTOMATIQUE DES PROGRESSIONS
+   TOUS LES 24 HEURES PAR UTILISATEUR
+============================================================ */
 
 async function updatePremiumProgressions() {
+
+    /*
+       Empêcher deux traitements simultanés.
+    */
+
+    if (progressionJobRunning) {
+
+        console.log(
+            "[PROGRESSION AUTO] Traitement déjà en cours."
+        );
+
+        return;
+
+    }
+
+
+    progressionJobRunning = true;
+
 
     try {
 
         console.log(
-            "[PROGRESSION PREMIUM] Vérification automatique..."
+            "[PROGRESSION AUTO] Vérification des progressions..."
         );
 
 
         /*
-         * Récupérer UNIQUEMENT les utilisateurs Premium
-         * dont la progression est inférieure à 100 %.
-         *
-         * IMPORTANT :
-         *
-         * COALESCE(is_premium, false) = true
-         *
-         * empêche les comptes standards
-         * d'entrer dans le système automatique.
-         */
+           Toujours garantir Celestine à 100 %.
+        */
+
+        await ensureCelestineCompleted();
+
+
+        /*
+           Date limite :
+           seules les progressions dont le dernier
+           changement date d'au moins 24h sont éligibles.
+        */
+
+        const dateLimite =
+            new Date(
+                Date.now() -
+                PROGRESSION_INTERVALLE
+            );
+
+
+        /*
+           On récupère uniquement les premiums
+           qui ne sont pas encore à 100 %.
+        */
 
         const result =
             await pool.query(
@@ -2282,28 +1932,25 @@ async function updatePremiumProgressions() {
                     id,
                     email,
                     progression,
-                    is_premium,
-                    updated_at
+                    progression_last_updated_at
 
                 FROM users
 
                 WHERE
-                    COALESCE(is_premium, false) = true
+                    COALESCE(is_premium, false)
+                    = true
 
                 AND
-                    COALESCE(progression, 0) < 100
+                    COALESCE(progression, 0)
+                    < 100
 
                 ORDER BY id ASC
                 `
             );
 
 
-        let nombreModifie = 0;
+        let updatedCount = 0;
 
-
-        /*
-         * Traiter chaque Premium séparément.
-         */
 
         for (
             const user
@@ -2311,27 +1958,122 @@ async function updatePremiumProgressions() {
         ) {
 
             /*
-             * DOUBLE SÉCURITÉ
-             *
-             * On refuse toute modification si
-             * l'utilisateur n'est pas Premium.
-             */
+               Celestine ne doit jamais être modifiée
+               par le système normal.
+            */
 
             if (
-                !isPremiumUser(user)
+                isCelestine(user)
             ) {
 
-                console.log(
-                    `[PROGRESSION PREMIUM] ${user.email} ignoré : compte standard.`
+                await pool.query(
+                    `
+                    UPDATE users
+
+                    SET
+                        progression = 100
+
+                    WHERE id = $1
+                    `,
+                    [
+                        user.id
+                    ]
                 );
 
                 continue;
+
             }
 
 
             /*
-             * Progression actuelle.
-             */
+               Si le timer est absent,
+               on le crée maintenant.
+
+               PAS d'augmentation immédiate.
+            */
+
+            if (
+                !user.progression_last_updated_at
+            ) {
+
+                await pool.query(
+                    `
+                    UPDATE users
+
+                    SET
+                        progression_last_updated_at =
+                            CURRENT_TIMESTAMP
+
+                    WHERE
+                        id = $1
+
+                    AND
+                        progression_last_updated_at IS NULL
+                    `,
+                    [
+                        user.id
+                    ]
+                );
+
+                continue;
+
+            }
+
+
+            /*
+               Vérification des 24 heures.
+            */
+
+            const dernierChangement =
+                new Date(
+                    user.progression_last_updated_at
+                );
+
+
+            if (
+                !Number.isFinite(
+                    dernierChangement.getTime()
+                )
+            ) {
+
+                await pool.query(
+                    `
+                    UPDATE users
+
+                    SET
+                        progression_last_updated_at =
+                            CURRENT_TIMESTAMP
+
+                    WHERE id = $1
+                    `,
+                    [
+                        user.id
+                    ]
+                );
+
+                continue;
+
+            }
+
+
+            if (
+                dernierChangement.getTime()
+                >
+                dateLimite.getTime()
+            ) {
+
+                /*
+                   Pas encore 24 heures.
+                */
+
+                continue;
+
+            }
+
+
+            /*
+               Progression actuelle.
+            */
 
             const ancienneProgression =
                 normalizeProgression(
@@ -2340,92 +2082,31 @@ async function updatePremiumProgressions() {
 
 
             /*
-             * Si la progression est déjà à 100 %,
-             * aucune modification.
-             */
+               Augmentation INDIVIDUELLE.
 
-            if (
-                ancienneProgression >= 100
-            ) {
+               Chaque utilisateur reçoit son propre
+               nombre aléatoire entre 1 et 5.
+            */
 
-                console.log(
-                    `[PROGRESSION PREMIUM] ${user.email} est déjà à 100 %.`
-                );
-
-                continue;
-            }
-
-
-            /* ====================================================
-               VÉRIFICATION DES 24 HEURES
-            ==================================================== */
-
-            if (
-                user.updated_at
-            ) {
-
-                const derniereMiseAJour =
-                    new Date(
-                        user.updated_at
-                    ).getTime();
-
-
-                const maintenant =
-                    Date.now();
-
-
-                const tempsEcoule =
-                    maintenant -
-                    derniereMiseAJour;
-
-
-                /*
-                 * Moins de 24 heures :
-                 * on ne fait absolument rien.
-                 */
-
-                if (
-                    tempsEcoule <
-                    DELAI_PROGRESSION_24H
-                ) {
-
-                    console.log(
-                        `[PROGRESSION PREMIUM] ${user.email} : attente des 24 heures.`
-                    );
-
-                    continue;
-                }
-            }
-
-
-            /* ====================================================
-               CALCUL DE L'AUGMENTATION
-            ==================================================== */
-
-            const ajout =
+            const augmentation =
                 progressionAleatoire();
 
-
-            /*
-             * Ajouter l'augmentation à la progression actuelle.
-             *
-             * Exemple :
-             *
-             * 45 + 3 = 48
-             *
-             * 98 + 5 = 100
-             */
 
             const nouvelleProgression =
                 Math.min(
                     100,
-                    ancienneProgression + ajout
+                    ancienneProgression +
+                    augmentation
                 );
 
 
-            /* ====================================================
-               MISE À JOUR SQL
-            ==================================================== */
+            /*
+               UPDATE atomique.
+
+               La condition sur progression_last_updated_at
+               évite qu'une double exécution augmente
+               deux fois le même utilisateur.
+            */
 
             const updateResult =
                 await pool.query(
@@ -2434,169 +2115,300 @@ async function updatePremiumProgressions() {
 
                     SET
                         progression = $1,
-                        updated_at = CURRENT_TIMESTAMP
+
+                        progression_last_updated_at =
+                            CURRENT_TIMESTAMP
 
                     WHERE
                         id = $2
 
                     AND
-                        COALESCE(is_premium, false) = true
+                        COALESCE(is_premium, false)
+                        = true
 
                     AND
-                        COALESCE(progression, 0) < 100
+                        COALESCE(progression, 0)
+                        < 100
+
+                    AND
+                        progression_last_updated_at
+                        <= $3
 
                     RETURNING
                         id,
                         email,
-                        progression,
-                        is_premium
+                        progression
                     `,
                     [
                         nouvelleProgression,
-                        user.id
+                        user.id,
+                        dateLimite
                     ]
                 );
 
 
-            /*
-             * Vérifier que la modification
-             * a réellement été effectuée.
-             */
-
             if (
-                updateResult.rows.length > 0
+                updateResult.rows.length
             ) {
 
-                nombreModifie++;
-
-
-                const progressionFinale =
-                    normalizeProgression(
-                        updateResult
-                            .rows[0]
-                            .progression
-                    );
+                const updatedUser =
+                    updateResult.rows[0];
 
 
                 console.log(
-                    `[PROGRESSION PREMIUM] ${user.email} : ${ancienneProgression}% + ${ajout}% = ${progressionFinale}%`
+                    `[PROGRESSION AUTO] ${updatedUser.email} : ${ancienneProgression}% -> ${updatedUser.progression}% (+${augmentation})`
                 );
 
 
-                /*
-                 * Si le Premium atteint 100 %.
-                 */
+                updatedCount++;
 
-                if (
-                    progressionFinale >= 100
-                ) {
-
-                    console.log(
-                        `[PROGRESSION PREMIUM] ${user.email} est maintenant TERMINÉ.`
-                    );
-                }
             }
+
         }
 
 
         console.log(
-            `[PROGRESSION PREMIUM] ${nombreModifie} utilisateur(s) Premium mis à jour.`
+            `[PROGRESSION AUTO] Vérification terminée. ${updatedCount} utilisateur(s) mis à jour.`
         );
 
 
     } catch (error) {
 
         console.error(
-            "[PROGRESSION PREMIUM] ERREUR :",
-            error.message
+            "[PROGRESSION AUTO] Erreur mise à jour :",
+            error
         );
+
+    } finally {
+
+        progressionJobRunning = false;
+
     }
+
 }
 
 
 /* ============================================================
-   DÉMARRAGE AUTOMATIQUE
+   DÉMARRAGE DU SYSTÈME AUTOMATIQUE
 ============================================================ */
 
-/*
- * Le serveur démarre le système après 5 secondes.
- *
- * IMPORTANT :
- * Cela ne modifie que les utilisateurs Premium.
- */
+function startProgressionScheduler() {
 
-setTimeout(
-    async () => {
-
-        try {
-
-            /*
-             * Initialiser uniquement les Premium
-             * qui n'ont pas encore de progression.
-             */
-
-            await initializePremiumProgressions();
+    console.log(
+        "[PROGRESSION AUTO] Scheduler démarré."
+    );
 
 
-            /*
-             * Vérifier immédiatement les Premium
-             * qui peuvent déjà recevoir leur progression.
-             */
+    /*
+       Première initialisation après quelques secondes.
+
+       Cela laisse le temps à PostgreSQL et Express
+       de terminer leur démarrage.
+    */
+
+    setTimeout(
+        async () => {
+
+            try {
+
+                await initializeUserProgressions();
+
+                await updatePremiumProgressions();
+
+            } catch (error) {
+
+                console.error(
+                    "[PROGRESSION AUTO] Erreur démarrage :",
+                    error
+                );
+
+            }
+
+        },
+        5000
+    );
+
+
+    /*
+       Vérification toutes les heures.
+
+       IMPORTANT :
+       cela ne veut PAS dire que la progression augmente
+       toutes les heures.
+
+       Le système vérifie simplement si CHAQUE utilisateur
+       a atteint ses propres 24 heures.
+    */
+
+    setInterval(
+        async () => {
 
             await updatePremiumProgressions();
 
+        },
+        60 * 60 * 1000
+    );
 
-        } catch (error) {
+}
 
-            console.error(
-                "[PROGRESSION PREMIUM] ERREUR DÉMARRAGE :",
-                error.message
-            );
-        }
 
-    },
-    5000
+/* ============================================================
+   DÉMARRAGE SCHEDULER
+============================================================ */
+
+startProgressionScheduler();
+
+
+/* ============================================================
+   ROUTE RACINE
+============================================================ */
+
+app.get(
+    "/",
+    async (req, res) => {
+
+        console.log(
+            "[BMJ API]",
+            req.method,
+            "/"
+        );
+
+
+        return res.json({
+
+            success: true,
+
+            message:
+                "BMJ SERVICE BACKEND opérationnel",
+
+            version:
+                "30.0.0",
+
+            database:
+                Boolean(DATABASE_URL),
+
+            timestamp:
+                new Date().toISOString()
+
+        });
+
+    }
 );
 
 
 /* ============================================================
-   VÉRIFICATION AUTOMATIQUE TOUTES LES HEURES
+   HEALTH
 ============================================================ */
 
-/*
- * Le serveur vérifie toutes les heures.
- *
- * MAIS :
- *
- * Cela ne signifie PAS que la progression augmente
- * toutes les heures.
- *
- * La fonction vérifie toujours que 24 heures
- * sont réellement écoulées depuis updated_at.
- *
- * ET surtout :
- *
- * seuls les Premium sont concernés.
- */
-
-setInterval(
-    async () => {
+app.get(
+    "/api/health",
+    async (req, res) => {
 
         try {
 
-            await updatePremiumProgressions();
+            await pool.query(
+                "SELECT 1"
+            );
+
+
+            return res.json({
+
+                success: true,
+
+                status: "healthy",
+
+                database: "connected",
+
+                timestamp:
+                    new Date().toISOString()
+
+            });
 
         } catch (error) {
 
             console.error(
-                "[PROGRESSION PREMIUM] ERREUR INTERVALLE :",
+                "[HEALTH]",
                 error.message
             );
+
+
+            return res
+                .status(500)
+                .json({
+
+                    success: false,
+
+                    status: "unhealthy",
+
+                    database: "error",
+
+                    message:
+                        error.message
+
+                });
+
         }
 
-    },
-    60 * 60 * 1000
+    }
 );
+
+
+/* ============================================================
+   TEST DATABASE
+============================================================ */
+
+app.get(
+    "/api/test-db",
+    async (req, res) => {
+
+        try {
+
+            const result =
+                await pool.query(
+                    `
+                    SELECT
+                        NOW() AS server_time
+                    `
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                database: "PostgreSQL",
+
+                server_time:
+                    result.rows[0]
+                        .server_time
+
+            });
+
+        } catch (error) {
+
+            console.error(
+                "[TEST DB]",
+                error.message
+            );
+
+
+            return res
+                .status(500)
+                .json({
+
+                    success: false,
+
+                    message:
+                        error.message
+
+                });
+
+        }
+
+    }
+);
+
+
 /* ============================================================
    STATISTIQUES ADMIN
 ============================================================ */
@@ -2608,305 +2420,324 @@ app.get(
 
         try {
 
-            const [
+            const usersResult =
+                await pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::INTEGER
+                        AS total_users,
 
-                usersResult,
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                COALESCE(
+                                    is_premium,
+                                    false
+                                )
+                                = true
+                        )::INTEGER
+                        AS premium_users,
 
-                paymentResult,
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                COALESCE(
+                                    is_blocked,
+                                    false
+                                )
+                                = true
+                        )::INTEGER
+                        AS blocked_users,
 
-                messagesResult,
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                COALESCE(
+                                    is_premium,
+                                    false
+                                )
+                                = false
 
-                certificatesResult
+                            AND
+                                COALESCE(
+                                    is_blocked,
+                                    false
+                                )
+                                = false
+                        )::INTEGER
+                        AS standard_users,
 
-            ] =
-                await Promise.all([
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                created_at >=
+                                CURRENT_DATE
+                        )::INTEGER
+                        AS today_users
 
-                    pool.query(
-                        `
-                        SELECT
+                    FROM users
+                    `
+                );
 
-                            COUNT(*)::INTEGER
-                                AS total,
 
-                            COUNT(*) FILTER
-                            (
-                                WHERE
-                                    COALESCE(
-                                        is_premium,
-                                        FALSE
-                                    ) = TRUE
-                            )::INTEGER
-                                AS premium,
+            const paymentsResult =
+                await pool.query(
+                    `
+                    SELECT
 
-                            COUNT(*) FILTER
-                            (
-                                WHERE
-                                    COALESCE(
-                                        is_premium,
-                                        FALSE
-                                    ) = FALSE
-                            )::INTEGER
-                                AS standard,
+                        COUNT(*)::INTEGER
+                        AS total_payments,
 
-                            COUNT(*) FILTER
-                            (
-                                WHERE
-                                    COALESCE(
-                                        is_blocked,
-                                        FALSE
-                                    ) = TRUE
-                            )::INTEGER
-                                AS blocked,
-
-                            COUNT(*) FILTER
-                            (
-                                WHERE
-                                    created_at::DATE =
-                                    CURRENT_DATE
-                            )::INTEGER
-                                AS today
-
-                        FROM users
-                        `
-                    ),
-
-                    pool.query(
-                        `
-                        SELECT
-
-                            COUNT(*)::INTEGER
-                                AS total,
-
-                            COUNT(*) FILTER
-                            (
-                                WHERE LOWER(
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                LOWER(
                                     COALESCE(
                                         statut,
                                         ''
                                     )
-                                ) IN
+                                )
+                                IN
                                 (
                                     'pending',
                                     'en_attente',
                                     'en attente'
                                 )
-                            )::INTEGER
-                                AS pending,
+                        )::INTEGER
+                        AS pending_payments,
 
-                            COUNT(*) FILTER
-                            (
-                                WHERE LOWER(
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                LOWER(
                                     COALESCE(
                                         statut,
                                         ''
                                     )
-                                ) IN
-                                (
-                                    'valide',
-                                    'validated',
-                                    'approved',
-                                    'paid'
                                 )
-                            )::INTEGER
-                                AS validated,
+                                IN
+                                (
+                                    'validated',
+                                    'valide',
+                                    'validé',
+                                    'approved',
+                                    'accepte',
+                                    'accepté'
+                                )
+                        )::INTEGER
+                        AS validated_payments,
 
-                            COUNT(*) FILTER
-                            (
-                                WHERE LOWER(
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                LOWER(
                                     COALESCE(
                                         statut,
                                         ''
                                     )
-                                ) IN
+                                )
+                                IN
                                 (
-                                    'refuse',
                                     'refused',
+                                    'refuse',
+                                    'refusé',
                                     'rejected'
                                 )
-                            )::INTEGER
-                                AS refused,
+                        )::INTEGER
+                        AS refused_payments,
 
-                            COALESCE(
-                                SUM(montant) FILTER
-                                (
-                                    WHERE LOWER(
+                        COALESCE(
+                            SUM(
+                                CASE
+                                    WHEN LOWER(
                                         COALESCE(
                                             statut,
                                             ''
                                         )
-                                    ) IN
-                                    (
-                                        'valide',
-                                        'validated',
-                                        'approved',
-                                        'paid'
                                     )
-                                ),
-                                0
-                            ) AS revenue
+                                    IN
+                                    (
+                                        'validated',
+                                        'valide',
+                                        'validé',
+                                        'approved',
+                                        'accepte',
+                                        'accepté'
+                                    )
+                                    THEN
+                                        COALESCE(
+                                            montant,
+                                            0
+                                        )
+                                    ELSE 0
+                                END
+                            ),
+                            0
+                        )::NUMERIC
+                        AS revenue
 
-                        FROM demandes_paiement
-                        `
-                    ),
+                    FROM demandes_paiement
+                    `
+                );
 
-                    pool.query(
-                        `
-                        SELECT
 
-                            COUNT(*)::INTEGER
-                                AS total,
+            const messagesResult =
+                await pool.query(
+                    `
+                    SELECT
+                        COUNT(*)::INTEGER
+                        AS total_messages
 
-                            COUNT(*) FILTER
-                            (
-                                WHERE
+                    FROM messages
+                    `
+                );
+
+
+            const certificatesResult =
+                await pool.query(
+                    `
+                    SELECT
+
+                        COUNT(*)::INTEGER
+                        AS total_certificates,
+
+                        COUNT(*) FILTER
+                        (
+                            WHERE
+                                LOWER(
                                     COALESCE(
-                                        is_read,
-                                        FALSE
-                                    ) = FALSE
-                            )::INTEGER
-                                AS unread
+                                        statut,
+                                        ''
+                                    )
+                                )
+                                IN
+                                (
+                                    'validated',
+                                    'valide',
+                                    'validé',
+                                    'approved'
+                                )
+                        )::INTEGER
+                        AS validated_certificates
 
-                        FROM messages
-                        `
-                    ),
-
-                    pool.query(
-                        `
-                        SELECT
-
-                            COUNT(*)::INTEGER
-                                AS total,
-
-                            COUNT(*) FILTER
-                            (
-                                WHERE
-                                    COALESCE(
-                                        is_authorized,
-                                        FALSE
-                                    ) = TRUE
-                            )::INTEGER
-                                AS authorized
-
-                        FROM certificates
-                        `
-                    )
-
-                ]);
+                    FROM certificates
+                    `
+                );
 
 
             const users =
-                usersResult.rows[0];
+                usersResult.rows[0] || {};
 
 
             const payments =
-                paymentResult.rows[0];
+                paymentsResult.rows[0] || {};
 
 
             const messages =
-                messagesResult.rows[0];
+                messagesResult.rows[0] || {};
 
 
             const certificates =
-                certificatesResult.rows[0];
-
-
-            const stats = {
-
-                users:
-                    Number(users.total) || 0,
-
-                premium:
-                    Number(users.premium) || 0,
-
-                standard:
-                    Number(users.standard) || 0,
-
-                blocked:
-                    Number(users.blocked) || 0,
-
-                today:
-                    Number(users.today) || 0,
-
-                payments:
-                    Number(payments.total) || 0,
-
-                totalPayments:
-                    Number(payments.total) || 0,
-
-                pending:
-                    Number(payments.pending) || 0,
-
-                validated:
-                    Number(payments.validated) || 0,
-
-                refused:
-                    Number(payments.refused) || 0,
-
-                revenue:
-                    Number(payments.revenue) || 0,
-
-                messages:
-                    Number(messages.total) || 0,
-
-                unreadMessages:
-                    Number(messages.unread) || 0,
-
-                certificates:
-                    Number(certificates.total) || 0,
-
-                certificates_authorized:
-                    Number(certificates.authorized) || 0,
-
-                authorizedCertificates:
-                    Number(certificates.authorized) || 0
-            };
+                certificatesResult.rows[0] || {};
 
 
             return res.json({
 
                 success: true,
 
-                stats,
+                users:
+                    safeNumber(
+                        users.total_users
+                    ),
 
-                statistiques:
-                    stats,
+                premium:
+                    safeNumber(
+                        users.premium_users
+                    ),
 
-                statistics:
-                    stats,
+                today:
+                    safeNumber(
+                        users.today_users
+                    ),
 
-                data:
-                    stats,
+                pending:
+                    safeNumber(
+                        payments.pending_payments
+                    ),
 
-                message:
-                    "Statistiques récupérées",
+                revenue:
+                    safeNumber(
+                        payments.revenue
+                    ),
 
-                generated_at:
-                    new Date().toISOString()
+                standard:
+                    safeNumber(
+                        users.standard_users
+                    ),
+
+                blocked:
+                    safeNumber(
+                        users.blocked_users
+                    ),
+
+                messages:
+                    safeNumber(
+                        messages.total_messages
+                    ),
+
+                certificates:
+                    safeNumber(
+                        certificates.total_certificates
+                    ),
+
+                validated:
+                    safeNumber(
+                        payments.validated_payments
+                    ),
+
+                refused:
+                    safeNumber(
+                        payments.refused_payments
+                    ),
+
+                totalPayments:
+                    safeNumber(
+                        payments.total_payments
+                    ),
+
+                authorizedCertificates:
+                    safeNumber(
+                        certificates.validated_certificates
+                    )
+
             });
 
         } catch (error) {
 
             console.error(
-                "[STATISTIQUES]",
+                "[ADMIN STATISTIQUES]",
                 error
             );
 
 
-            return res.status(500).json({
+            return res
+                .status(500)
+                .json({
 
-                success: false,
+                    success: false,
 
-                message:
-                    "Erreur statistiques",
+                    message:
+                        "Impossible de récupérer les statistiques.",
 
-                error:
-                    error.message
-            });
+                    error:
+                        error.message
+
+                });
+
         }
+
     }
 );
-
-
 /* ============================================================
    TEST STATISTIQUES
 ============================================================ */
