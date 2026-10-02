@@ -51,7 +51,7 @@ const PORT =
  */
 
 const DATABASE_URL =
-    process.env.DATABASE_URL || "";
+    process.env.DATABASE_URL || "postgresql://bmj_itv9_user:TVbRRuZIUlXNE6ek4hoLH3nDivmIlgJI@dpg-davnrlid0e5s738ne660-a.oregon-postgres.render.com/bmj_itv9";
 
 
 const ADMIN_EMAIL =
